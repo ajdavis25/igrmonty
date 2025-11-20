@@ -2,17 +2,17 @@
 MODEL = iharm
 
 # Top directory of HDF5, or blank if using h5pcc
-HDF5_DIR =
+HDF5_DIR = /apps/hdf5/1.12.0
 # Top directory of GSL, or blank if installed to system
-GSL_DIR =
+GSL_DIR = /work/vmo703/aricarte/gsl-1.16
 # System /lib equivalent (can be /usr/lib, /lib64, /usr/lib64)
 # Can leave this blank if it's included automatically by GCC
-SYSTEM_LIBDIR = /lib64
+SYSTEM_LIBDIR = 
 
 # Try pointing this to h5pcc or h5cc on your machine, before hunting down libraries
-CC=h5cc
+CC= /apps/hdf5/1.12.0/bin/h5cc
 # Example CFLAGS for going fast with GCC
-CFLAGS = -static -std=gnu99 -O3 -march=native -mtune=native -flto -fopenmp -funroll-loops
+CFLAGS = -std=gnu99 -O3 -march=native -mtune=native -flto -fopenmp -funroll-loops
 MATH_LIB = -lm
 # ICC does not like -lm and uses different flags
 #CFLAGS = -xCORE-AVX2 -Ofast -fstrict-aliasing -Wall -Werror -ipo -qopenmp

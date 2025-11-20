@@ -8,6 +8,8 @@ grmonty
 # Output
 out*.txt
 plot*.txt
+*.log
+*.png
 
 # Data
 *.p

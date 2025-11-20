@@ -1,0 +1,35 @@
+# ----------- GRMONTY parameter file: Sgr A* calibration run -----------
+# purpose: broadband SED for Sgr A*, F_230 ≈ 2.4 Jy
+# -------------------------------------------------------------------
+
+# --- general ---
+seed -1                        # RNG seed; -1 = randomize
+Ns 5e4                         # number of photons (increase for smoother SED)
+MBH 4.3e6                      # Sgr A* mass [Msun]
+M_unit 7.5e+24                 # M_unit from munit_results_sgrA.csv (SANE: 7.5e24)
+dump /work/vmo703/grmhd_dump_samples/Sa-0.5_4000.h5
+
+# --- output paths ---
+spectrum /work/vmo703/igrmonty_outputs/sgra/spectrum_Sa-0.5_4000.h5
+image    /work/vmo703/igrmonty_outputs/sgra/image_Sa-0.5_4000_230GHz.h5
+
+# --- bias / sampling control ---
+fit_bias 1                     # 1 = ON adaptive bias; keep 'bias' fixed
+fit_bias_ns 50000              # not needed with fit_bias 0
+bias 0.05                      # photon bias
+
+# --- emission / electron model ---
+TP_OVER_TE 3.0
+beta_crit 1.0
+beta_crit_coefficient 0.5
+with_electrons 3               # 2 = R-Beta model; 3 = Crit-Beta model
+trat_small 1
+trat_large 20
+Thetae_max 1e100
+
+# --- frequency sampling (broadband) ---
+LNUMIN 9.0        # log10(Hz) lower bound = 1 GHz
+LNUMAX 13.0       # log10(Hz) upper bound = 10 THz
+N_EBINS 200
+alpha_spec -1.0
+nmu 1

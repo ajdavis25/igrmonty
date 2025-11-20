@@ -2,11 +2,11 @@
 
 #include "model_radiation.h"
 
-//#include "gsl_sf_gamma.h"
-//#pragma omp threadprivate(r)
-/* 
+// #include "gsl_sf_gamma.h"
+// #pragma omp threadprivate(r)
+/*
 
-"mixed" emissivity formula 
+"mixed" emissivity formula
 
 interpolates between Petrosian limit and
 classical thermal synchrotron limit
@@ -35,27 +35,45 @@ static double int_jnu_kappa(double Ne, double Thetae, double Bmag, double nu);
 static double int_jnu_powerlaw(double Ne, double Thetae, double Bmag, double nu);
 static double int_jnu_bremss(double Ne, double Thetae, double nu);
 
+static inline int thetae_in_valid_range(double *Thetae)
+{
+  if (!isfinite(*Thetae) || *Thetae <= 0.)
+  {
+    return 0;
+  }
+  if (*Thetae > THETAE_MAX)
+  {
+    *Thetae = THETAE_MAX;
+  }
+  return 1;
+}
+
 double jnu(double nu, double Ne, double Thetae, double B, double theta)
 {
   double j = 0.;
-  
+
+  if (!thetae_in_valid_range(&Thetae))
+  {
+    return 0.;
+  }
+
 #if SYNCHROTRON
- #if MODEL_EDF==EDF_KAPPA_FIXED
+#if MODEL_EDF == EDF_KAPPA_FIXED
   j += jnu_kappa(nu, Ne, Thetae, B, theta);
- #elif MODEL_EDF==EDF_MAXWELL_JUTTNER
+#elif MODEL_EDF == EDF_MAXWELL_JUTTNER
   j += jnu_thermal(nu, Ne, Thetae, B, theta);
- #elif MODEL_EDF==EDF_POWER_LAW
+#elif MODEL_EDF == EDF_POWER_LAW
   j += jnu_powerlaw(nu, Ne, Thetae, B, theta);
- #else
+#else
   fprintf(stderr, "must choose valid MODEL_EDF\n");
   exit(3);
- #endif
+#endif
 #endif
 
-  #if BREMSSTRAHLUNG
+#if BREMSSTRAHLUNG
   j += jnu_bremss(nu, Ne, Thetae);
-  #endif
-  
+#endif
+
   return j;
 }
 
@@ -64,26 +82,32 @@ double jnu_ratio_brems(double nu, double Ne, double Thetae, double B, double the
   double synch = 0.;
   double brems = 0.;
 
+  if (!thetae_in_valid_range(&Thetae))
+  {
+    return 0.;
+  }
+
 #if SYNCHROTRON
- #if MODEL_EDF==EDF_KAPPA_FIXED
+#if MODEL_EDF == EDF_KAPPA_FIXED
   synch = jnu_kappa(nu, Ne, Thetae, B, theta);
- #elif MODEL_EDF==EDF_MAXWELL_JUTTNER
+#elif MODEL_EDF == EDF_MAXWELL_JUTTNER
   synch = jnu_thermal(nu, Ne, Thetae, B, theta);
- #elif MODEL_EDF==EDF_POWER_LAW
+#elif MODEL_EDF == EDF_POWER_LAW
   synch = jnu_powerlaw(nu, Ne, Thetae, B, theta);
- #else
+#else
   fprintf(stderr, "must choose valid MODEL_EDF\n");
   exit(3);
- #endif  // MODEL_EDF
-#endif  // SYNCHROTRON
+#endif // MODEL_EDF
+#endif // SYNCHROTRON
 
-  #if BREMSSTRAHLUNG
+#if BREMSSTRAHLUNG
   brems = jnu_bremss(nu, Ne, Thetae);
-  #endif // BREMSSTRAHLUNG
+#endif // BREMSSTRAHLUNG
 
-  if ( synch + brems == 0 ) return 0.;
-  
-  return brems / ( synch + brems );
+  if (synch + brems == 0)
+    return 0.;
+
+  return brems / (synch + brems);
 
   // silence unused warnings
   (void)jnu_bremss;
@@ -95,24 +119,29 @@ double jnu_ratio_brems(double nu, double Ne, double Thetae, double B, double the
 double int_jnu(double Ne, double Thetae, double B, double nu)
 {
   double intj = 0.;
-  
+
+  if (!thetae_in_valid_range(&Thetae))
+  {
+    return 0.;
+  }
+
 #if SYNCHROTRON
- #if MODEL_EDF==EDF_KAPPA_FIXED
+#if MODEL_EDF == EDF_KAPPA_FIXED
   intj += int_jnu_kappa(Ne, Thetae, B, nu);
- #elif MODEL_EDF==EDF_MAXWELL_JUTTNER
+#elif MODEL_EDF == EDF_MAXWELL_JUTTNER
   intj += int_jnu_thermal(Ne, Thetae, B, nu);
- #elif MODEL_EDF==EDF_POWER_LAW
+#elif MODEL_EDF == EDF_POWER_LAW
   intj += int_jnu_powerlaw(Ne, Thetae, B, nu);
- #else
+#else
   fprintf(stderr, "must choose valid MODEL_EDF\n");
   exit(3);
- #endif  // MODEL_EDF
-#endif  // SYNCHROTRON
+#endif // MODEL_EDF
+#endif // SYNCHROTRON
 
 #if BREMSSTRAHLUNG
   intj += int_jnu_bremss(Ne, Thetae, nu);
 #endif
-  
+
   return intj;
 
   // silence unused warnings
@@ -124,100 +153,112 @@ double int_jnu(double Ne, double Thetae, double B, double nu)
 
 static double jnu_bremss(double nu, double Ne, double Thetae)
 {
-  if (Thetae < THETAE_MIN) 
+  if (!(Thetae > THETAE_MIN))
     return 0.;
 
   double Te = Thetae * ME * CL * CL / KBOL;
-  double x = HPL*nu/(KBOL*Te);
+  double x = HPL * nu / (KBOL * Te);
   double efac = 0.;
   double gff = 1.2;
-  
-  if (x < 1.e-3) {
-    efac = (24. - 24.*x + 12.*x*x - 4.*x*x*x + x*x*x*x) / 24.;
-  } else {
+
+  if (x < 1.e-3)
+  {
+    efac = (24. - 24. * x + 12. * x * x - 4. * x * x * x + x * x * x * x) / 24.;
+  }
+  else
+  {
     efac = exp(-x);
   }
 
-#if 1   // following Straub+ 2012
-  double Fei=0., Fee=0., fei=0., fee=0.;
+#if 1 // following Straub+ 2012
+  double Fei = 0., Fee = 0., fei = 0., fee = 0.;
 
   double SOMMERFELD_ALPHA = 1. / 137.036;
   double eta = 0.5616;
   double e_charge = 4.80e-10; // in esu
   double re = e_charge * e_charge / ME / CL / CL;
-  double gammaE = 0.577; // = - Log[0.5616] 
+  double gammaE = 0.577; // = - Log[0.5616]
 
-  if (x > 1) {
+  if (x > 1)
+  {
     gff = sqrt(3. / M_PI / x);
-  } else {
+  }
+  else
+  {
     gff = sqrt(3.) / M_PI * log(4 / gammaE / x);
   }
 
-  if (Thetae < 1) {
-    Fei = 4. * sqrt(2.*Thetae/M_PI/M_PI/M_PI) * (1. + 1.781*pow(Thetae,1.34));
-    Fee = 20./9./sqrt(M_PI) * (44. - 3.*M_PI*M_PI) * pow(Thetae,1.5);
-    Fee *= (1. + 1.1*Thetae + Thetae*Thetae - 1.25*pow(Thetae,2.5));
-  } else {
-    Fei = 9.*Thetae/(2.*M_PI) * ( log(1.123 * Thetae + 0.48) + 1.5 );
-    Fee = 24. * Thetae * ( log(2.*eta*Thetae) + 1.28 );
+  if (Thetae < 1)
+  {
+    Fei = 4. * sqrt(2. * Thetae / M_PI / M_PI / M_PI) * (1. + 1.781 * pow(Thetae, 1.34));
+    Fee = 20. / 9. / sqrt(M_PI) * (44. - 3. * M_PI * M_PI) * pow(Thetae, 1.5);
+    Fee *= (1. + 1.1 * Thetae + Thetae * Thetae - 1.25 * pow(Thetae, 2.5));
+  }
+  else
+  {
+    Fei = 9. * Thetae / (2. * M_PI) * (log(1.123 * Thetae + 0.48) + 1.5);
+    Fee = 24. * Thetae * (log(2. * eta * Thetae) + 1.28);
   }
   fei = Ne * Ne * SIGMA_THOMSON * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fei;
   fee = Ne * Ne * re * re * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fee;
 
-  return (fei+fee) / (4.*M_PI) * HPL/KBOL/Te * efac * gff;
- 
-#else 
+  return (fei + fee) / (4. * M_PI) * HPL / KBOL / Te * efac * gff;
+
+#else
   // Method from Rybicki & Lightman, ultimately from Novikov & Thorne
 
-  double rel = (1. + 4.4e-10*Te);
+  double rel = (1. + 4.4e-10 * Te);
 
-  double jv = 1./(4.*M_PI)*pow(2,5)*M_PI*pow(EE,6)/(3.*ME*pow(CL,3));
-  jv *= pow(2.*M_PI/(3.*KBOL*ME),1./2.);
-  jv *= pow(Te,-1./2.)*Ne*Ne;
-  jv *= efac*rel*gff;
+  double jv = 1. / (4. * M_PI) * pow(2, 5) * M_PI * pow(EE, 6) / (3. * ME * pow(CL, 3));
+  jv *= pow(2. * M_PI / (3. * KBOL * ME), 1. / 2.);
+  jv *= pow(Te, -1. / 2.) * Ne * Ne;
+  jv *= efac * rel * gff;
 
   return jv;
-#endif 
-
+#endif
 }
 
-#define CST 1.88774862536	/* 2^{11/12} */
+#define CST 1.88774862536 /* 2^{11/12} */
 static double jnu_thermal(double nu, double Ne, double Thetae, double B,
-			double theta)
+                          double theta)
 {
-	double K2, nuc, nus, x, f, j, sth, xp1, xx;
-	double K2_eval(double Thetae);
+  double K2, nuc, nus, x, f, j, sth, xp1, xx;
+  double K2_eval(double Thetae);
 
-	if (Thetae < THETAE_MIN) {
-		return 0.;
+  if (!(Thetae > THETAE_MIN))
+  {
+    return 0.;
   }
 
-	K2 = K2_eval(Thetae);
+  K2 = K2_eval(Thetae);
 
-	nuc = EE * B / (2. * M_PI * ME * CL);
-	sth = sin(theta);
-	nus = (2. / 9.) * nuc * Thetae * Thetae * sth;
+  nuc = EE * B / (2. * M_PI * ME * CL);
+  sth = sin(theta);
+  nus = (2. / 9.) * nuc * Thetae * Thetae * sth;
 
-	if (nu > 1.e12 * nus) {
-		return 0.;
+  if (nu > 1.e12 * nus)
+  {
+    return 0.;
   }
 
-	x = nu / nus;
-	xp1 = pow(x, 1. / 3.);
-	xx = sqrt(x) + CST * sqrt(xp1);
-	f = xx * xx;
-	j = (M_SQRT2 * M_PI * EE * EE * Ne * nus / (3. * CL * K2)) * f *
-	    exp(-xp1);
+  x = nu / nus;
+  xp1 = pow(x, 1. / 3.);
+  xx = sqrt(x) + CST * sqrt(xp1);
+  f = xx * xx;
+  j = (M_SQRT2 * M_PI * EE * EE * Ne * nus / (3. * CL * K2)) * f *
+      exp(-xp1);
 
-	return j;
+  return j;
 }
 
 static double jnu_powerlaw(double nu, double Ne, double Thetae, double B, double theta)
 {
-  if (Thetae < THETAE_MIN) {
+  if (!(Thetae > THETAE_MIN))
+  {
     return 0.;
   }
-  if (theta < SMALL || theta > M_PI-SMALL) {
+  if (theta < SMALL || theta > M_PI - SMALL)
+  {
     return 0.;
   }
 
@@ -227,129 +268,138 @@ static double jnu_powerlaw(double nu, double Ne, double Thetae, double B, double
 
   double sth = sin(theta);
   double nuc = EE * B / (2. * M_PI * ME * CL);
-  double factor = (Ne * pow(EE,2.) * nuc)/CL;
+  double factor = (Ne * pow(EE, 2.) * nuc) / CL;
 
-  if (nu > 1.e8 * nuc) {
+  if (nu > 1.e8 * nuc)
+  {
     return 0.;
   }
 
-  double Xs = nu/(nuc*sth);
+  double Xs = nu / (nuc * sth);
 
-  double Js = pow(3.,p/2.)*(p-1)*sth/(2*(p+1)*(pow(gmin,1-p)-pow(gmax,1-p)));
-  Js *= gsl_sf_gamma((3*p-1)/12.)*gsl_sf_gamma((3*p+19)/12.)*pow(Xs,-(p-1)/2.);
+  double Js = pow(3., p / 2.) * (p - 1) * sth / (2 * (p + 1) * (pow(gmin, 1 - p) - pow(gmax, 1 - p)));
+  Js *= gsl_sf_gamma((3 * p - 1) / 12.) * gsl_sf_gamma((3 * p + 19) / 12.) * pow(Xs, -(p - 1) / 2.);
 
-  return Js*factor;
+  return Js * factor;
 }
 
 #include <gsl/gsl_sf_gamma.h>
 static double jnu_kappa(double nu, double Ne, double Thetae, double B, double theta)
 {
-	if (Thetae < THETAE_MIN) {
-		return 0.;
-  }
-  if (theta < SMALL || theta > M_PI-SMALL) {
+  if (!(Thetae > THETAE_MIN))
+  {
     return 0.;
-  } 
+  }
+  if (theta < SMALL || theta > M_PI - SMALL)
+  {
+    return 0.;
+  }
 
   double kap = model_kappa;
-	double nuc = EE * B / (2. * M_PI * ME * CL);
-  double js = Ne*pow(EE,2)*nuc/CL;
-  double x = 3.*pow(kap,-3./2.);
+  double nuc = EE * B / (2. * M_PI * ME * CL);
+  double js = Ne * pow(EE, 2) * nuc / CL;
+  double x = 3. * pow(kap, -3. / 2.);
   double Jslo, Jshi;
 
   double w = kappa_w(Thetae, model_kappa);
-  double nuk = nuc * w*kap * w*kap * sin(theta);
-  double Xk = nu/nuk;
+  double nuk = nuc * w * kap * w * kap * sin(theta);
+  double Xk = nu / nuk;
 
-  Jslo = pow(Xk,1./3.)*sin(theta)*4.*M_PI*gsl_sf_gamma(kap-4./3.)/(pow(3.,7./3.)*gsl_sf_gamma(kap-2.));
-  Jshi = pow(Xk,-(kap-2.)/2.)*sin(theta)*pow(3.,(kap-1.)/2.);
-  Jshi *= (kap-2.)*(kap-1.)/4.*gsl_sf_gamma(kap/4.-1./3.)*gsl_sf_gamma(kap/4.+4./3.);
+  Jslo = pow(Xk, 1. / 3.) * sin(theta) * 4. * M_PI * gsl_sf_gamma(kap - 4. / 3.) / (pow(3., 7. / 3.) * gsl_sf_gamma(kap - 2.));
+  Jshi = pow(Xk, -(kap - 2.) / 2.) * sin(theta) * pow(3., (kap - 1.) / 2.);
+  Jshi *= (kap - 2.) * (kap - 1.) / 4. * gsl_sf_gamma(kap / 4. - 1. / 3.) * gsl_sf_gamma(kap / 4. + 4. / 3.);
 
-  double Js = pow(pow(Jslo,-x) + pow(Jshi,-x),-1./x);
+  double Js = pow(pow(Jslo, -x) + pow(Jshi, -x), -1. / x);
 
-  if (isnan(js*Js) || js*Js < 0. || js*Js > 1.e200 || js*Js < 1.e-200) {
-    printf("BAD jkap! %e\n", js*Js);
+  if (isnan(js * Js) || js * Js < 0. || js * Js > 1.e200 || js * Js < 1.e-200)
+  {
+    printf("BAD jkap! %e\n", js * Js);
     printf("nu Ne Thetae B theta = %e %e %e %e %e\n", nu, Ne, Thetae, B, theta);
     exit(-1);
   }
 
-  if (isnan(Jslo) || isinf(Jslo) || Jslo < 0. || Jslo > 1.e100) {
+  if (isnan(Jslo) || isinf(Jslo) || Jslo < 0. || Jslo > 1.e100)
+  {
     printf("JSLO ERROR! %e\n", Jslo);
   }
 
-  double cut = exp(-nu/NUCUT);
+  double cut = exp(-nu / NUCUT);
 
   return js * Js * cut;
 }
 
 #undef CST
 
-#define JCST	(M_SQRT2*EE*EE*EE/(27*ME*CL*CL))
+#define JCST (M_SQRT2 * EE * EE * EE / (27 * ME * CL * CL))
 static double int_jnu_thermal(double Ne, double Thetae, double Bmag, double nu)
 {
   // Returns energy per unit time at frequency nu, all in cgs
 
-	double j_fac, K2;
-	double F_eval(double Thetae, double B, double nu);
-	double K2_eval(double Thetae);
+  double j_fac, K2;
+  double F_eval(double Thetae, double B, double nu);
+  double K2_eval(double Thetae);
 
-	if (Thetae < THETAE_MIN) {
-		return 0.;
+  if (!(Thetae > THETAE_MIN))
+  {
+    return 0.;
   }
 
-	K2 = K2_eval(Thetae);
-	if (K2 == 0.) {
-		return 0.;
+  K2 = K2_eval(Thetae);
+  if (K2 == 0.)
+  {
+    return 0.;
   }
 
-	j_fac = Ne * Bmag * Thetae * Thetae / K2;
+  j_fac = Ne * Bmag * Thetae * Thetae / K2;
 
-	return JCST * j_fac * F_eval(Thetae, Bmag, nu);
+  return JCST * j_fac * F_eval(Thetae, Bmag, nu);
 }
 
 static double jnu_kappa_integrand(double th, void *params)
 {
-	double K = *(double *)params;
-	double sth = sin(th);
-	double Xk = K / sth;
+  double K = *(double *)params;
+  double sth = sin(th);
+  double Xk = K / sth;
   double kap = model_kappa;
 
-	if (sth < 1.e-150 || Xk > 2.e8) {
-		return 0.;
+  if (sth < 1.e-150 || Xk > 2.e8)
+  {
+    return 0.;
   }
 
-  double Jslo = pow(Xk,1./3.)*sth*4.*M_PI*GAM1/(pow(3.,7./3.)*GAM2);
-  double Jshi = pow(Xk,-(kap-2.)/2.)*sth*pow(3.,(kap-1.)/2.)*(kap-2.)*(kap-1.)/4.*GAM3*GAM4;
+  double Jslo = pow(Xk, 1. / 3.) * sth * 4. * M_PI * GAM1 / (pow(3., 7. / 3.) * GAM2);
+  double Jshi = pow(Xk, -(kap - 2.) / 2.) * sth * pow(3., (kap - 1.) / 2.) * (kap - 2.) * (kap - 1.) / 4. * GAM3 * GAM4;
 
-  double x = 3.*pow(kap,-3./2.);
-  double Js = pow(pow(Jslo,-x) + pow(Jshi,-x),-1./x);
+  double x = 3. * pow(kap, -3. / 2.);
+  double Js = pow(pow(Jslo, -x) + pow(Jshi, -x), -1. / x);
 
   return Js * sth;
 }
 
 static double jnu_powerlaw_integrand(double th, void *params)
 {
- double K = *(double *)params;
- double sth = sin(th);
- double x = K / sth;
+  double K = *(double *)params;
+  double sth = sin(th);
+  double x = K / sth;
 
- double p = powerlaw_p;
- double gmin = powerlaw_gamma_min;
- double gmax = powerlaw_gamma_max;
+  double p = powerlaw_p;
+  double gmin = powerlaw_gamma_min;
+  double gmax = powerlaw_gamma_max;
 
- double factor = sth;
+  double factor = sth;
 
- double Js = pow(3.,p/2.)*(p-1)*sth/(2*(p+1)*(pow(gmin,1-p)-pow(gmax,1-p)));
- Js *= gsl_sf_gamma((3*p-1)/12.)*gsl_sf_gamma((3*p+19)/12.)*pow(x,-(p-1)/2.);
+  double Js = pow(3., p / 2.) * (p - 1) * sth / (2 * (p + 1) * (pow(gmin, 1 - p) - pow(gmax, 1 - p)));
+  Js *= gsl_sf_gamma((3 * p - 1) / 12.) * gsl_sf_gamma((3 * p + 19) / 12.) * pow(x, -(p - 1) / 2.);
 
- return Js*factor;
+  return Js * factor;
 }
 
 static double int_jnu_powerlaw(double Ne, double Thetae, double B, double nu)
 {
   double G_eval_powerlaw(double Thetae, double B, double nu);
 
-  if (Thetae < THETAE_MIN) {
+  if (!(Thetae > THETAE_MIN))
+  {
     return 0.;
   }
 
@@ -362,37 +412,37 @@ static double int_jnu_kappa(double Ne, double Thetae, double B, double nu)
   // Returns energy per unit time at
   // frequency nu in cgs
 
-	double G_eval(double Thetae, double B, double nu);
+  double G_eval(double Thetae, double B, double nu);
 
-	if (Thetae < THETAE_MIN) {
-		return 0.;
+  if (!(Thetae > THETAE_MIN))
+  {
+    return 0.;
   }
 
-  double nuc = EE*B/(2.*M_PI*ME*CL);
-	double js = Ne*EE*EE*nuc/CL;
-  double cut = exp(-nu/NUCUT);
+  double nuc = EE * B / (2. * M_PI * ME * CL);
+  double js = Ne * EE * EE * nuc / CL;
+  double cut = exp(-nu / NUCUT);
 
-	return js*G_eval(Thetae, B, nu)*cut;
+  return js * G_eval(Thetae, B, nu) * cut;
 }
 #undef JCST
 
 static double int_jnu_bremss(double Ne, double Thetae, double nu)
 {
-  return 4.*M_PI*jnu_bremss(nu, Ne, Thetae);
+  return 4. * M_PI * jnu_bremss(nu, Ne, Thetae);
 }
 
-#define CST 1.88774862536	/* 2^{11/12} */
+#define CST 1.88774862536 /* 2^{11/12} */
 static double jnu_thermal_integrand(double th, void *params)
 {
-	double K = *(double *) params;
-	double sth = sin(th);
-	double x = K / sth;
+  double K = *(double *)params;
+  double sth = sin(th);
+  double x = K / sth;
 
-	if (sth < 1.e-150 || x > 2.e8)
-		return 0.;
+  if (sth < 1.e-150 || x > 2.e8)
+    return 0.;
 
-	return sth * sth * pow(sqrt(x) + CST * pow(x, 1. / 6.),
-			       2.) * exp(-pow(x, 1. / 3.));
+  return sth * sth * pow(sqrt(x) + CST * pow(x, 1. / 6.), 2.) * exp(-pow(x, 1. / 3.));
 }
 
 #undef CST
@@ -414,8 +464,8 @@ static double lT_min, dlT;
 void init_emiss_tables(void)
 {
 
-	int k;
-	double result, err, K, T;
+  int k;
+  double result, err, K, T;
 
   // Thermal synchrotron lookup table
   {
@@ -432,11 +482,12 @@ void init_emiss_tables(void)
     //   \int_0^\pi ( (K/\sin\theta)^{1/2} + 2^{11/12}(K/\sin\theta)^{1/6})^2 \exp[-(K/\sin\theta)^{1/3}]
     // so that J_{\nu} = const.*F(K)
     w = gsl_integration_workspace_alloc(1000);
-    for (k = 0; k <= N_ESAMP; k++) {
+    for (k = 0; k <= N_ESAMP; k++)
+    {
       K = exp(k * dlK + lK_min);
       gsl_integration_qag(&func, 0., M_PI / 2., EPSABS, EPSREL,
-              1000, GSL_INTEG_GAUSS61, w, &result,
-              &err);
+                          1000, GSL_INTEG_GAUSS61, w, &result,
+                          &err);
       _F[k] = log(4 * M_PI * result);
     }
     gsl_integration_workspace_free(w);
@@ -445,11 +496,11 @@ void init_emiss_tables(void)
   // kappa OR powerlaw synchrotron lookup table
   {
     // Store & evaluate Gamma functions
-    GAM1 = gsl_sf_gamma(model_kappa - 4./3.);
+    GAM1 = gsl_sf_gamma(model_kappa - 4. / 3.);
     GAM2 = gsl_sf_gamma(model_kappa - 2.);
-    GAM3 = gsl_sf_gamma(model_kappa/4. - 1./3.);
-    GAM4 = gsl_sf_gamma(model_kappa/4. + 4./3.);
-   
+    GAM3 = gsl_sf_gamma(model_kappa / 4. - 1. / 3.);
+    GAM4 = gsl_sf_gamma(model_kappa / 4. + 4. / 3.);
+
     double L;
     gsl_function func;
     gsl_integration_workspace *w;
@@ -458,7 +509,7 @@ void init_emiss_tables(void)
     (void)jnu_kappa_integrand;
     (void)jnu_powerlaw_integrand;
 
-#if MODEL_EDF==EDF_KAPPA_FIXED
+#if MODEL_EDF == EDF_KAPPA_FIXED
     func.function = &jnu_kappa_integrand;
 #else
     func.function = &jnu_powerlaw_integrand;
@@ -472,64 +523,71 @@ void init_emiss_tables(void)
     //   2 \pi \int_0^\pi  ...( (K/\sin\theta)^{1/2} + 2^{11/12}(K/\sin\theta)^{1/6})^2 \exp[-(K/\sin\theta)^{1/3}]
     //  so that J_{\nu} = const.*G(L)
     w = gsl_integration_workspace_alloc(1000);
-    for (k = 0; k <= N_ESAMP; k++) {
+    for (k = 0; k <= N_ESAMP; k++)
+    {
       L = exp(k * dlL + lL_min);
-      gsl_integration_qag(&func, 0., M_PI / 2., EPSABS, EPSREL, 1000, 
-        GSL_INTEG_GAUSS61, w, &result, &err);
-      _G[k] = log(4*M_PI*result);
+      gsl_integration_qag(&func, 0., M_PI / 2., EPSABS, EPSREL, 1000,
+                          GSL_INTEG_GAUSS61, w, &result, &err);
+      _G[k] = log(4 * M_PI * result);
     }
     gsl_integration_workspace_free(w);
   }
 
-	// Bessel K2 lookup table
+  // Bessel K2 lookup table
   {
     lT_min = log(TMIN);
     dlT = log(TMAX / TMIN) / (N_ESAMP);
-    for (k = 0; k <= N_ESAMP; k++) {
-		  T = exp(k * dlT + lT_min);
-		  _K2[k] = log(gsl_sf_bessel_Kn(2, 1. / T));
-	  }
+    for (k = 0; k <= N_ESAMP; k++)
+    {
+      T = exp(k * dlT + lT_min);
+      _K2[k] = log(gsl_sf_bessel_Kn(2, 1. / T));
+    }
   }
 }
 
-// rapid evaluation of K_2(1/\Thetae) 
+// rapid evaluation of K_2(1/\Thetae)
 
 double K2_eval(double Thetae)
 {
-	double linear_interp_K2(double);
+  double linear_interp_K2(double);
 
-	if (Thetae < THETAE_MIN)
-		return 0.;
-	if (Thetae > TMAX)
-		return 2. * Thetae * Thetae;
+  if (!(Thetae > THETAE_MIN))
+    return 0.;
+  if (Thetae > TMAX)
+    return 2. * Thetae * Thetae;
 
-	return linear_interp_K2(Thetae);
+  return linear_interp_K2(Thetae);
 }
 
-#define KFAC (9*M_PI*ME*CL/EE)
+#define KFAC (9 * M_PI * ME * CL / EE)
 double F_eval(double Thetae, double Bmag, double nu)
 {
-	double K, x;
-	double linear_interp_F(double);
+  double K, x;
+  double linear_interp_F(double);
 
-	K = KFAC * nu / (Bmag * Thetae * Thetae);
+  K = KFAC * nu / (Bmag * Thetae * Thetae);
 
-	if (K > KMAX) {
-		return 0.;
-	} else if (K < KMIN) {
-		// use a good approximation
-		x = pow(K, 0.333333333333333333);
-		return (x * (37.67503800178 + 2.240274341836 * x));
-	} else {
-		return linear_interp_F(K);
-	}
+  if (K > KMAX)
+  {
+    return 0.;
+  }
+  else if (K < KMIN)
+  {
+    // use a good approximation
+    x = pow(K, 0.333333333333333333);
+    return (x * (37.67503800178 + 2.240274341836 * x));
+  }
+  else
+  {
+    return linear_interp_F(K);
+  }
 }
 
-
-double G_eval_powerlaw(double Thetae, double Bmag, double nu) {
+double G_eval_powerlaw(double Thetae, double Bmag, double nu)
+{
 
   double K;
-    double linear_interp_G(double);
+  double linear_interp_G(double);
   double nuc = EE * Bmag / (2. * M_PI * ME * CL);
 
   K = nu / nuc;
@@ -537,31 +595,35 @@ double G_eval_powerlaw(double Thetae, double Bmag, double nu) {
     return 0.;
   if (K < KMIN)
     return 0.;
-  double F_value = linear_interp_G(K); 
+  double F_value = linear_interp_G(K);
   if (isnan(F_value))
     fprintf(stderr, " f_eval %e %e %e %e %e\n", nu, Thetae, nuc, Bmag, F_value);
   return F_value;
 }
 
-
-#define GFAC (2.*M_PI*ME*CL/EE)
+#define GFAC (2. * M_PI * ME * CL / EE)
 double G_eval(double Thetae, double Bmag, double nu)
 {
-	double L;
-	double linear_interp_G(double);
+  double L;
+  double linear_interp_G(double);
 
   double w = kappa_w(Thetae, model_kappa);
 
-	L = GFAC*nu/(Bmag* w*model_kappa * w*model_kappa);
+  L = GFAC * nu / (Bmag * w * model_kappa * w * model_kappa);
 
-	if (L > LMAX) {
-		return 0.;
-	} else if (L < LMIN) {
-	  return 0.;
-  } else {
+  if (L > LMAX)
+  {
+    return 0.;
+  }
+  else if (L < LMIN)
+  {
+    return 0.;
+  }
+  else
+  {
 
-		return linear_interp_G(L);
-	}
+    return linear_interp_G(L);
+  }
 }
 
 #undef KFAC
@@ -575,43 +637,42 @@ double G_eval(double Thetae, double Bmag, double nu)
 
 double linear_interp_K2(double Thetae)
 {
-	int i;
-	double di, lT;
+  int i;
+  double di, lT;
 
-	lT = log(Thetae);
+  lT = log(Thetae);
 
-	di = (lT - lT_min)/dlT;
-	i = (int) di;
-	di = di - i;
+  di = (lT - lT_min) / dlT;
+  i = (int)di;
+  di = di - i;
 
-	return exp((1. - di) * _K2[i] + di * _K2[i + 1]);
+  return exp((1. - di) * _K2[i] + di * _K2[i + 1]);
 }
 
 double linear_interp_F(double K)
 {
-	int i;
-	double di, lK;
+  int i;
+  double di, lK;
 
-	lK = log(K);
+  lK = log(K);
 
-	di = (lK - lK_min)/dlK;
-	i = (int) di;
-	di = di - i;
+  di = (lK - lK_min) / dlK;
+  i = (int)di;
+  di = di - i;
 
-	return exp((1. - di) * _F[i] + di * _F[i + 1]);
+  return exp((1. - di) * _F[i] + di * _F[i + 1]);
 }
 
 double linear_interp_G(double L)
 {
-	int i;
-	double di, lL;
+  int i;
+  double di, lL;
 
-	lL = log(L);
+  lL = log(L);
 
-	di = (lL - lL_min)/dlL;
-	i = (int) di;
-	di = di - i;
+  di = (lL - lL_min) / dlL;
+  i = (int)di;
+  di = di - i;
 
-	return exp((1. - di) * _G[i] + di * _G[i + 1]);
+  return exp((1. - di) * _G[i] + di * _G[i + 1]);
 }
-

@@ -5,7 +5,7 @@
 #define LNUMAX log(NUMAX)
 #define DLNU ((LNUMAX-LNUMIN)/N_ESAMP)
 #define THETAE_MAX 1000.
-#define THETAE_MIN 0.3
+#define THETAE_MIN 1e-3  // 1e-3 for R-Beta | 0.3 for Crit-Beta
 #define WEIGHT_MIN (1.e28)
 
 #define SYNCHROTRON (1)
@@ -32,4 +32,3 @@
 
 #include "hdf5_utils.h"
 #include "h5io.h"
-
