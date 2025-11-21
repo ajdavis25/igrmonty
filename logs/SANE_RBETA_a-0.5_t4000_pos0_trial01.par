@@ -1,5 +1,5 @@
 seed -1
-Ns 200000.0
+Ns 1000000.0
 MBH 6500000000.0
 M_unit 1.83000000e+27
 dump /work/vmo703/grmhd_dump_samples/Sa-0.5_4000.h5

@@ -9,14 +9,17 @@ void track_super_photon(struct of_photon *ph)
   double alpha_scatti, alpha_scattf;
   double alpha_absi, alpha_absf;
   double dl, x1;
-  double nu, Thetae, Ne, B, theta;
+  double nu, nu_use, Thetae, Ne, B, theta;
   struct of_photon php;
   double dtauK, frac;
   double bias = 0.;
+  double bias_raw = 0.;
   double Xi[NDIM], Ki[NDIM], dKi[NDIM], E0;
   double Gcov[NDIM][NDIM], Ucon[NDIM], Ucov[NDIM], Bcon[NDIM], Bcov[NDIM];
+  int bias_clamped = 0;
   int nstep = 0;
-  
+  static int bias_warn_count = 0;
+ 
   // Don't track zero-weight photons
   if (ph->w < 1) {
     return;
@@ -41,6 +44,7 @@ void track_super_photon(struct of_photon *ph)
 
   theta = get_bk_angle(ph->X, ph->K, Ucov, Bcov, B);
   nu = get_fluid_nu(ph->X, ph->K, Ucov);
+  if (nu < 0.) nu = 0.;
   alpha_scatti = alpha_inv_scatt(nu, Thetae, Ne);
   alpha_absi = alpha_inv_abs(nu, Thetae, Ne, B, theta);
   bi = bias_func(Thetae, ph->w);
@@ -78,12 +82,15 @@ void track_super_photon(struct of_photon *ph)
     gcov_func(ph->X, Gcov);
     get_fluid_params(ph->X, Gcov, &Ne, &Thetae, &B, Ucon, Ucov, Bcon, Bcov);
     if (alpha_absi > 0. || alpha_scatti > 0. || Ne > 0.) {
+      bias_clamped = 0;
+      bias_raw = bias;
       bound_flag = 0;
       if (Ne == 0.)
         bound_flag = 1;
       if (!bound_flag) {
         theta = get_bk_angle(ph->X, ph->K, Ucov, Bcov, B);
         nu = get_fluid_nu(ph->X, ph->K, Ucov);
+        if (nu < 0.) nu = 0.;
         if (isnan(nu)) {
           fprintf(stderr, "isnan nu: track_super_photon dl,E0 %g %g\n", dl, E0);
           fprintf(stderr, "Xi, %g %g %g %g\n", Xi[0], Xi[1], Xi[2], Xi[3]);
@@ -94,30 +101,41 @@ void track_super_photon(struct of_photon *ph)
       }
 
       // Scattering optical depth along step
-      if (bound_flag || nu < 0.) {
+      nu_use = nu < 0. ? 0. : nu;
+      if (bound_flag) {
         dtau_scatt = 0.5*alpha_scatti*dtauK*dl;
         dtau_abs = 0.5*alpha_absi*dtauK*dl;
         alpha_scatti = alpha_absi = 0.;
         bias = 0.;
         bi = 0.;
       } else {
-        alpha_scattf = alpha_inv_scatt(nu, Thetae, Ne);
+        alpha_scattf = alpha_inv_scatt(nu_use, Thetae, Ne);
         dtau_scatt = 0.5*(alpha_scatti + alpha_scattf)*dtauK*dl;
         alpha_scatti = alpha_scattf;
 
         // Absorption optical depth along step
-        alpha_absf = alpha_inv_abs(nu, Thetae, Ne, B, theta);
+        alpha_absf = alpha_inv_abs(nu_use, Thetae, Ne, B, theta);
         dtau_abs = 0.5*(alpha_absi + alpha_absf)*dtauK*dl;
         alpha_absi = alpha_absf;
 
         bf = bias_func(Thetae, ph->w);
-        bias = 0.5*(bi + bf);
+        bias_raw = 0.5*(bi + bf);
+        bias = bias_raw;
         bi = bf;
+        bias_clamped = 0;
+        if (bias < 1.0) {
+          bias = 1.0;
+          bias_clamped = 1;
+        }
       }
 
       x1 = -log(monty_rand());
-      php.w = ph->w/bias;
-      if (ph->ratio_brems < 0.9 && bias*dtau_scatt > x1 && php.w > WEIGHT_MIN) {
+      if (bias <= 0.) {
+        php.w = 0.;
+      } else {
+        php.w = ph->w/bias;
+      }
+      if (bias > 0. && ph->ratio_brems < 0.9 && bias*dtau_scatt > x1 && php.w > WEIGHT_MIN) {
         if (isnan(php.w) || isinf(php.w)) {
           fprintf(stderr, "w isnan in track_super_photon: Ne, bias, ph->w, php.w  %g, %g, %g, %g\n",
             Ne, bias, ph->w, php.w);
@@ -160,11 +178,15 @@ void track_super_photon(struct of_photon *ph)
 
         // Actually about to scatter photon
         if (Ne > 0.) { 
-          if (bias < 1.0) { // Ensure bias >= 1
-	    #pragma omp atomic
+          if (bias_clamped) {
+            #pragma omp atomic
             ++invalid_bias; // count invalid_bias
-            fprintf(stderr, "ERROR!!! bias = %g < 1\n", bias);
-            return;
+            int warn_local;
+            #pragma omp atomic capture
+            warn_local = ++bias_warn_count;
+            if (warn_local <= 10) {
+              fprintf(stderr, "WARNING!!! bias = %g < 1 (suppressed after 10)\n", bias_raw);
+            }
           }
           scatter_super_photon(ph, &php, Ne, Thetae, B, Ucon, Bcon, Gcov);
 
@@ -176,12 +198,9 @@ void track_super_photon(struct of_photon *ph)
 
         theta = get_bk_angle(ph->X, ph->K, Ucov, Bcov, B);
         nu = get_fluid_nu(ph->X, ph->K, Ucov);
-        if (nu < 0.) {
-          alpha_scatti = alpha_absi = 0.;
-        } else {
-          alpha_scatti = alpha_inv_scatt(nu, Thetae, Ne);
-          alpha_absi = alpha_inv_abs(nu, Thetae, Ne, B, theta);
-        }
+        if (nu < 0.) nu = 0.;
+        alpha_scatti = alpha_inv_scatt(nu, Thetae, Ne);
+        alpha_absi = alpha_inv_abs(nu, Thetae, Ne, B, theta);
         bi = bias_func(Thetae, ph->w);
 
         ph->tau_abs += dtau_abs;
@@ -230,4 +249,3 @@ void track_super_photon(struct of_photon *ph)
   }
 }
 #undef MAXNSTEP
-
