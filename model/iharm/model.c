@@ -9,14 +9,19 @@
 // with_electrons ->
 //     0 : constant TP_OVER_TE
 //     1 : use dump file model (kawazura?)
-//     2: use mixed TP_OVER_TE (moscibrodzka "beta" model)
-//     3: use critical beta TP_OVER_TE (Anantua)
+//     2 : mixed TP_OVER_TE (moscibrodzka "beta" model)
+//     3 : critical beta TP_OVER_TE (Anantua)
+//     4 : mixed TP_OVER_TE with constant-beta jet supplement
+//     5 : critical beta TP_OVER_TE with constant-beta jet supplement
 static double tp_over_te = 3.;
 static double trat_small = 2.;
 static double trat_large = 70.;
 static double beta_crit = 1.;
 static double beta_crit_coefficient = 0.5;
 static double Thetae_max = 1.e100;
+static double sigma_transition = 1.0;
+static double constant_beta_e0 = 0.1;
+static double constant_beta_e0_exponent = 1.0;
 static int with_electrons = 2;
 
 // fluid data
@@ -355,6 +360,40 @@ static inline double clamp_thetae_limits(double thetae, double thetae_min, doubl
   return thetae;
 }
 
+static inline double constant_beta_thetae(double safe_rho, double safe_B)
+{
+  if (!(constant_beta_e0 > 0.0))
+  {
+    return 0.0;
+  }
+
+  double ne_cgs = safe_rho * Ne_unit;
+  if (!(ne_cgs > 0.0) || !isfinite(ne_cgs))
+  {
+    return 0.0;
+  }
+
+  double B_cgs = fabs(safe_B) * B_unit;
+  double energy_density = (B_cgs * B_cgs) / (2.0 * (game - 1.0));
+  if (!(energy_density > 0.0) || !isfinite(energy_density))
+  {
+    return 0.0;
+  }
+
+  double term = pow(energy_density, constant_beta_e0_exponent);
+  if (!isfinite(term))
+  {
+    return 0.0;
+  }
+
+  double thetae_val = constant_beta_e0 * term / (ne_cgs * ME * CL * CL);
+  if (!isfinite(thetae_val) || thetae_val <= 0.0)
+  {
+    return 0.0;
+  }
+  return thetae_val;
+}
+
 double thetae_func(double uu, double rho, double B, double kel)
 {
   const double rho_floor = 1.e-30;
@@ -373,6 +412,13 @@ double thetae_func(double uu, double rho, double B, double kel)
 
   double thetae_floor = THETAE_MIN;
   double thetae = thetae_floor;
+  double sigma = 0.0;
+  if (safe_rho > 0.0)
+  {
+    sigma = safe_B * safe_B / safe_rho;
+  }
+  int add_constant_component = (with_electrons == 4 || with_electrons == 5);
+  int in_high_sigma_region = add_constant_component && sigma_transition > 0.0 && isfinite(sigma) && sigma >= sigma_transition;
 
   if (with_electrons == 0)
   {
@@ -388,7 +434,7 @@ double thetae_func(double uu, double rho, double B, double kel)
     }
     thetae = safe_kel * pow(safe_rho, game - 1.0) * Thetae_unit;
   }
-  else if (with_electrons == 2)
+  else if (with_electrons == 2 || with_electrons == 4)
   {
     // -------- R-Beta model --------
     thetae_floor = fmax(thetae_floor, rb_floor);
@@ -422,7 +468,7 @@ double thetae_func(double uu, double rho, double B, double kel)
       thetae = (MP / ME) * (game - 1.0) * (gamp - 1.0) / denom * safe_uu / safe_rho;
     }
   }
-  else if (with_electrons == 3)
+  else if (with_electrons == 3 || with_electrons == 5)
   {
     // -------- Critical-Beta model --------
     thetae_floor = fmax(thetae_floor, crit_floor);
@@ -462,6 +508,15 @@ double thetae_func(double uu, double rho, double B, double kel)
     if (denom > 0.0 && isfinite(denom))
     {
       thetae = (MP / ME) * (game - 1.0) * (gamp - 1.0) / denom * safe_uu / safe_rho;
+    }
+  }
+
+  if (in_high_sigma_region)
+  {
+    double thetae_const = constant_beta_thetae(safe_rho, safe_B);
+    if (thetae_const > 0.0)
+    {
+      thetae += thetae_const;
     }
   }
 
@@ -516,7 +571,7 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
     *Thetae = THETAE_MAX;
 
   sig = pow(*B / B_unit, 2) / (*Ne / Ne_unit);
-  if (sig > 1. || i < 9)
+  if ((with_electrons < 4 && sig > 1.) || i < 9)
   {
     *Thetae = SMALL;
   }
@@ -584,7 +639,7 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
     *Thetae = THETAE_MAX;
 
   sig = pow(*B / B_unit, 2) / (*Ne / Ne_unit);
-  if (sig > 1.)
+  if (with_electrons < 4 && sig > 1.)
     *Thetae = SMALL;
 }
 
@@ -651,6 +706,9 @@ void init_data(int argc, char *argv[], Params *params)
     with_electrons = params->with_electrons;
     biasTuning = params->biasTuning;
     Thetae_max = params->Thetae_max;
+    sigma_transition = params->sigma_transition;
+    constant_beta_e0 = params->constant_beta_e0;
+    constant_beta_e0_exponent = params->constant_beta_e0_exponent;
   }
   else
   {
@@ -720,19 +778,40 @@ void init_data(int argc, char *argv[], Params *params)
     Thetae_unit = MP / ME * (gam - 1.) / (1. + tp_over_te);
     Thetae_unit = 2. / 3. * MP / ME / (2. + tp_over_te);
   }
-  else if (with_electrons == 2)
+  else if (with_electrons == 2 || with_electrons == 4)
   {
     Thetae_unit = 2. / 3. * MP / ME / 5.;
-    fprintf(stderr, "using mixed tp_over_te with trat_small = %g and trat_large = %g\n", trat_small, trat_large);
+    if (with_electrons == 4)
+    {
+      fprintf(stderr,
+              "using mixed tp_over_te with trat_small = %g, trat_large = %g, sigma_transition = %g, "
+              "constant_beta_e0 = %g, constant_beta_e0_exponent = %g\n",
+              trat_small, trat_large, sigma_transition, constant_beta_e0, constant_beta_e0_exponent);
+    }
+    else
+    {
+      fprintf(stderr, "using mixed tp_over_te with trat_small = %g and trat_large = %g\n", trat_small, trat_large);
+    }
   }
-  else if (with_electrons == 3)
+  else if (with_electrons == 3 || with_electrons == 5)
   {
     Thetae_unit = 2. / 3. * MP / ME / 5.;
-    fprintf(stderr, "using critical beta tp_over_te with beta_crit_coefficient = %g and beta_crit = %g\n", beta_crit_coefficient, beta_crit);
+    if (with_electrons == 5)
+    {
+      fprintf(stderr,
+              "using critical beta tp_over_te with beta_crit_coefficient = %g, beta_crit = %g, "
+              "sigma_transition = %g, constant_beta_e0 = %g, constant_beta_e0_exponent = %g\n",
+              beta_crit_coefficient, beta_crit, sigma_transition, constant_beta_e0, constant_beta_e0_exponent);
+    }
+    else
+    {
+      fprintf(stderr, "using critical beta tp_over_te with beta_crit_coefficient = %g and beta_crit = %g\n",
+              beta_crit_coefficient, beta_crit);
+    }
   }
   else
   {
-    fprintf(stderr, "! please change electron model in model/iharm.c\n");
+    fprintf(stderr, "! unsupported electron model selection (with_electrons = %d)\n", with_electrons);
     exit(-3);
   }
 
@@ -999,14 +1078,27 @@ void report_spectrum(int N_superph_made, Params *params)
   {
     h5io_add_data_dbl(fid, "/params/electrons/tp_over_te", tp_over_te);
   }
-  else if (with_electrons == 2)
+  else if (with_electrons == 2 || with_electrons == 4)
   {
     h5io_add_data_dbl(fid, "/params/electrons/rlow", trat_small);
     h5io_add_data_dbl(fid, "/params/electrons/rhigh", trat_large);
+    if (with_electrons == 4)
+    {
+      h5io_add_data_dbl(fid, "/params/electrons/sigma_transition", sigma_transition);
+      h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0", constant_beta_e0);
+      h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0_exponent", constant_beta_e0_exponent);
+    }
   }
-  else if (with_electrons == 3)
+  else if (with_electrons == 3 || with_electrons == 5)
   {
     h5io_add_data_dbl(fid, "/params/electrons/beta_crit_coefficient", beta_crit_coefficient);
+    h5io_add_data_dbl(fid, "/params/electrons/beta_crit", beta_crit);
+    if (with_electrons == 5)
+    {
+      h5io_add_data_dbl(fid, "/params/electrons/sigma_transition", sigma_transition);
+      h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0", constant_beta_e0);
+      h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0_exponent", constant_beta_e0_exponent);
+    }
   }
   h5io_add_data_int(fid, "/params/electrons/type", with_electrons);
 

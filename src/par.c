@@ -21,6 +21,9 @@ void load_par_from_argv(int argc, char *argv[], Params *params) {
   params->trat_small = 1.;
   params->trat_large = 10.;
   params->Thetae_max = 1.e100;
+  params->sigma_transition = 1.0;
+  params->constant_beta_e0 = 0.1;
+  params->constant_beta_e0_exponent = 1.0;
 
   // Load parameters
   for (int i=0; i<argc-1; ++i) {
@@ -74,6 +77,9 @@ void load_par (const char *fname, Params *params) {
     read_param(line, "trat_small", &(params->trat_small), TYPE_DBL);
     read_param(line, "trat_large", &(params->trat_large), TYPE_DBL);
     read_param(line, "Thetae_max", &(params->Thetae_max), TYPE_DBL);
+    read_param(line, "sigma_transition", &(params->sigma_transition), TYPE_DBL);
+    read_param(line, "constant_beta_e0", &(params->constant_beta_e0), TYPE_DBL);
+    read_param(line, "constant_beta_e0_exponent", &(params->constant_beta_e0_exponent), TYPE_DBL);
 
     // set model parameters
     try_set_radiation_parameter(line);
@@ -111,6 +117,4 @@ void read_param (const char *line, const char *key, void *val, int type) {
   }
 
 }
-
-
 

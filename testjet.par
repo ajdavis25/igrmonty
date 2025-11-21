@@ -15,7 +15,7 @@ beta_crit 1.0
 trat_small 1
 trat_large 20
 
-with_electrons 3
+with_electrons 4  # 4 = RBETAwJET || 5 = CRITBETAwJET
 
 dump /work/vmo703/grmhd_dump_samples/Sa-0.5_6000.h5
 spectrum /work/vmo703/igrmonty_outputs/m87/spectrum_Sa-0.5_6000.h5

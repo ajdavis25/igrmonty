@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=80
 #SBATCH --time=2-00:00:00
 #SBATCH --partition=compute2
-#SBATCH --array=0-35%10
+#SBATCH --array=10-17%10
 
 # optional overrides when submitting:
 #   sbatch --export=RUN_STATE=SANE,RUN_DUMPS="4000 4200" igrmonty/batch.slurm
@@ -27,7 +27,7 @@ CSV=/work/vmo703/data/munits_results.csv
 NROWS=$(($(wc -l < "$CSV") - 1))
 RUN_STATE="${RUN_STATE:-ALL}"
 RUN_DUMPS="${RUN_DUMPS:-}"
-ROWS_PER_JOB=${ROWS_PER_JOB:-10}
+ROWS_PER_JOB=${ROWS_PER_JOB:-1}
 
 CHUNK_INDEX=${SLURM_ARRAY_TASK_ID}
 CHUNK_START=$((CHUNK_INDEX * ROWS_PER_JOB))

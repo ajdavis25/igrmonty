@@ -163,7 +163,7 @@ void track_super_photon(struct of_photon *ph)
           if (bias < 1.0) { // Ensure bias >= 1
 	    #pragma omp atomic
             ++invalid_bias; // count invalid_bias
-            fprintf(stderr, "ERROR!!! bias = %g < 1\n", bias);
+            fprintf(stderr, "WARNING!!! bias = %g < 1\n", bias);
             return;
           }
           scatter_super_photon(ph, &php, Ne, Thetae, B, Ucon, Bcon, Gcov);

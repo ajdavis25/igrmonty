@@ -39,6 +39,9 @@ typedef struct params_t {
   double trat_small;
   double trat_large;
   double Thetae_max;
+  double sigma_transition;
+  double constant_beta_e0;
+  double constant_beta_e0_exponent;
 
   char loaded;
 } Params;

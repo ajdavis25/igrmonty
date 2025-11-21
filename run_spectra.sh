@@ -129,7 +129,7 @@ DUMP_DIR="$REPO_ROOT/grmhd_dump_samples"
 OUT_DIR="$REPO_ROOT/igrmonty_outputs/m87"
 LOG_DIR="$SCRIPT_DIR/logs"
 
-NS=1e6
+NS=2e5
 MBH=6.5e9
 TP_OVER_TE_VALUE=3.0
 FIT_BIAS_NS=50000
@@ -176,8 +176,11 @@ while IFS=, read -r dump_idx timestep sim_state model spin pos MunitOffset Munit
   model="${model//$'\r'/}"
   electron_mode="$(model_to_electron_mode "$model")" || { echo "Skipping unknown model '$model' for dump $dump_idx" >&2; continue; }
 
-  # Hard-code M_unit per state (preferred over CSV's MunitUsed column)
-  if [[ "$sim_state" == "SANE" ]]; then
+  csv_munit_used="${MunitUsed// /}"
+  csv_munit_used="${csv_munit_used//$'\r'/}"
+  if [[ -n "$csv_munit_used" ]]; then
+    MunitUsed="$csv_munit_used"
+  elif [[ "$sim_state" == "SANE" ]]; then
     MunitUsed="1.83e27"
   elif [[ "$sim_state" == "MAD" ]]; then
     MunitUsed="7.49e24"
@@ -221,7 +224,7 @@ EOF_PAR
   ./grmonty -par "$par_file" > "$log_file" 2>&1
 
   ((rows_ran++))
-done < <(tail -n +2 "$CSV")
+done < <(tail -n +2 "$CSV") || true
 
 if [[ -n "$ROW_FILTER" && "$rows_ran" -eq 0 ]]; then
   echo "Requested row $ROW_FILTER not found or was skipped by filters." >&2

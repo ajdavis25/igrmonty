@@ -937,7 +937,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     row = load_row(args.csv, args.row)
     context = build_context(row)
 
-    default_munit = STATE_DEFAULT_MUNIT[context["state"]]
+    munit_used = row.get("MunitUsed", "").strip()
+    default_munit: float
+    if munit_used:
+        try:
+            default_munit = float(munit_used)
+        except ValueError:
+            default_munit = STATE_DEFAULT_MUNIT[context["state"]]
+    else:
+        default_munit = STATE_DEFAULT_MUNIT[context["state"]]
+
     # optional override if you ever add --init-munit
     init_munit = (
         args.init_munit

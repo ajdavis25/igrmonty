@@ -1,7 +1,7 @@
 seed -1
-Ns 200000.0
+Ns 20000.0
 MBH 6500000000.0
-M_unit 1.83000000e+27
+M_unit 1.01240000e+29
 dump /work/vmo703/grmhd_dump_samples/Sa-0.5_4000.h5
 spectrum /work/vmo703/igrmonty_outputs/m87/spectrum_Sa-0.5_4000_RBETA_pos0_trial01.h5
 
