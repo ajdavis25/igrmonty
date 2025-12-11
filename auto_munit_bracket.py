@@ -50,9 +50,9 @@ STATE_DEFAULT_MUNIT: Dict[str, float] = {
 # mapping from model name to GRMONTY with_electrons mode
 MODEL_TO_ELECTRON_MODE: Dict[str, int] = {
     "RBETA": 2,
-    "RBETAWJET": 2,
+    "RBETAWJET": 4,
     "CRITBETA": 3,
-    "CRITBETAWJET": 3,
+    "CRITBETAWJET": 5,
 }
 
 # geometry / units for flux conversion
@@ -80,7 +80,7 @@ TrialResult = namedtuple(
 
 
 def cap_jump(prev_munit: float, new_munit: float, max_factor: float = 30.0) -> float:
-    """prevent catastrophic GRMONTY jumps (e.g. ×700)."""
+    """prevent catastrophic GRMONTY jumps (e.g. x700)."""
     if prev_munit <= 0:
         return new_munit
     if new_munit > prev_munit * max_factor:
@@ -324,7 +324,7 @@ def write_par_file(
                 f"dump {dump_file}",
                 f"spectrum {spectrum_path}",
                 "",
-                "fit_bias 1",
+                "fit_bias 1",  # 0 off or 1 on
                 f"fit_bias_ns {bias_ns}",
                 f"bias {bias_start}",
                 f"ratio {target_ratio}",
@@ -404,7 +404,9 @@ class MunitTuner:
         existing: List[TrialResult] = []
 
         # 1) look for a final spectrum (no _trialXX)
-        final_spec = base_spec.with_suffix(".h5")
+        # avoid Path.with_suffix here because the spin tag contains a '.' (e.g. -0.5),
+        # which Path treats as an existing suffix. appending preserves the full name.
+        final_spec = base_spec.with_name(f"{base_spec.name}.h5")
         final_par = LOG_DIR / f"{log_tag}.par"
         final_log = LOG_DIR / f"{log_tag}.log"
 
@@ -770,7 +772,7 @@ class MunitTuner:
     def cleanup(self, best: TrialResult) -> None:
         """optionally remove non-winning trials and rename best trial to final."""
         base_spec = self.context["spectrum_base"]
-        final_spec = base_spec.with_suffix(".h5")
+        final_spec = base_spec.with_name(f"{base_spec.name}.h5")
         final_log = LOG_DIR / f"{self.context['log_tag']}.log"
         final_par = LOG_DIR / f"{self.context['log_tag']}.par"
 

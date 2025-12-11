@@ -2,7 +2,13 @@
 #include "coordinates.h"
 #include "model_radiation.h"
 
+#include <float.h>
+
 #define NVAR (10)
+
+static const double THETAE_HARD_MAX = 1.e3;
+static const double BETA_FLOOR = 1.e-5;
+static const double SIGMA_MAX = 300.0;
 
 // electron model. these values will be overwritten by anything found in par.c
 // or in the runtime parameter file.
@@ -18,10 +24,14 @@ static double trat_small = 2.;
 static double trat_large = 70.;
 static double beta_crit = 1.;
 static double beta_crit_coefficient = 0.5;
-static double Thetae_max = 1.e100;
+static double Thetae_max = 1.e3;
 static double sigma_transition = 1.0;
 static double constant_beta_e0 = 0.1;
 static double constant_beta_e0_exponent = 1.0;
+static double jet_sigma_cut = -1.0;
+static double jet_beta_cut = -1.0;
+static double jet_thetae = 0.0;
+static double jet_ne_mult = 1.0;
 static int with_electrons = 2;
 
 // fluid data
@@ -129,6 +139,11 @@ double stepsize(double X[NDIM], double K[NDIM])
 
 void record_super_photon(struct of_photon *ph)
 {
+  // DEBUG: print escaped photon info
+  /*fprintf(stderr,
+          "ESCAPE E=%g tau_scatt=%g tau_abs=%g nscatt=%d\n",
+          ph->E, ph->tau_scatt, ph->tau_abs, ph->nscatt);*/
+
   double lE, dx2;
   int iE, ix2, ic;
 
@@ -338,26 +353,54 @@ static inline double clamp_positive(double value, double floor)
 
 static inline double clamp_thetae_limits(double thetae, double thetae_min, double thetae_max)
 {
-  if (!isfinite(thetae))
+  if (!isfinite(thetae_min) || thetae_min < THETAE_MIN)
+  {
+    thetae_min = THETAE_MIN;
+  }
+
+  double thetae_upper = thetae_max;
+  if (!isfinite(thetae_upper) || thetae_upper <= 0.0)
+  {
+    thetae_upper = thetae_min;
+  }
+  thetae_upper = fmin(thetae_upper, THETAE_HARD_MAX);
+  if (thetae_upper < thetae_min)
+  {
+    thetae_upper = thetae_min;
+  }
+
+  if (!isfinite(thetae) || thetae < thetae_min)
   {
     thetae = thetae_min;
   }
-  if (thetae < thetae_min)
+  if (thetae > thetae_upper)
   {
-    thetae = thetae_min;
-  }
-
-  if (!isfinite(thetae_max) || thetae_max <= thetae_min)
-  {
-    thetae_max = thetae_min;
-  }
-
-  if (thetae > thetae_max)
-  {
-    thetae = thetae_max;
+    thetae = thetae_upper;
   }
 
   return thetae;
+}
+
+static inline double clamp_sigma(double sigma)
+{
+  if (!isfinite(sigma) || sigma < 0.0)
+  {
+    return 0.0;
+  }
+  if (sigma > SIGMA_MAX)
+  {
+    return SIGMA_MAX;
+  }
+  return sigma;
+}
+
+static inline double clamp_beta_value(double beta)
+{
+  if (!isfinite(beta) || beta < BETA_FLOOR)
+  {
+    return BETA_FLOOR;
+  }
+  return beta;
 }
 
 static inline double constant_beta_thetae(double safe_rho, double safe_B)
@@ -380,8 +423,25 @@ static inline double constant_beta_thetae(double safe_rho, double safe_B)
     return 0.0;
   }
 
-  double term = pow(energy_density, constant_beta_e0_exponent);
-  if (!isfinite(term))
+  double exponent = constant_beta_e0_exponent;
+  if (!(exponent > 0.0) || !isfinite(exponent))
+  {
+    return 0.0;
+  }
+
+  double log_term = exponent * log(energy_density);
+  if (!isfinite(log_term))
+  {
+    return 0.0;
+  }
+  const double log_term_cap = log(DBL_MAX);
+  if (log_term > log_term_cap)
+  {
+    log_term = log_term_cap;
+  }
+
+  double term = exp(log_term);
+  if (!isfinite(term) || term <= 0.0)
   {
     return 0.0;
   }
@@ -392,6 +452,40 @@ static inline double constant_beta_thetae(double safe_rho, double safe_B)
     return 0.0;
   }
   return thetae_val;
+}
+
+static inline int in_jet_region(double safe_rho, double safe_uu, double safe_B)
+{
+  if (!(with_electrons == 4 || with_electrons == 5))
+  {
+    return 0;
+  }
+
+  double sigma = 0.0;
+  if (safe_rho > 0.0)
+  {
+    sigma = clamp_sigma(safe_B * safe_B / safe_rho);
+  }
+
+  double beta = INFINITY;
+  double denom_beta = 0.5 * safe_B * safe_B;
+  if (denom_beta > 0.0)
+  {
+    beta = safe_uu * (gam - 1.0) / denom_beta;
+  }
+
+  if (isfinite(beta))
+  {
+    beta = clamp_beta_value(beta);
+  }
+
+  double sigma_cut_val = (isfinite(jet_sigma_cut) && jet_sigma_cut > 0.0) ? jet_sigma_cut : 0.0;
+  double beta_cut_val = (isfinite(jet_beta_cut) && jet_beta_cut > 0.0) ? jet_beta_cut : 0.0;
+
+  int sigma_cut = sigma_cut_val > 0.0 && isfinite(sigma) && sigma >= sigma_cut_val;
+  int beta_cut = beta_cut_val > 0.0 && isfinite(beta) && beta <= beta_cut_val;
+
+  return sigma_cut || beta_cut;
 }
 
 double thetae_func(double uu, double rho, double B, double kel)
@@ -415,10 +509,11 @@ double thetae_func(double uu, double rho, double B, double kel)
   double sigma = 0.0;
   if (safe_rho > 0.0)
   {
-    sigma = safe_B * safe_B / safe_rho;
+    sigma = clamp_sigma(safe_B * safe_B / safe_rho);
   }
   int add_constant_component = (with_electrons == 4 || with_electrons == 5);
   int in_high_sigma_region = add_constant_component && sigma_transition > 0.0 && isfinite(sigma) && sigma >= sigma_transition;
+  int in_jet = in_jet_region(safe_rho, safe_uu, safe_B);
 
   if (with_electrons == 0)
   {
@@ -448,6 +543,10 @@ double thetae_func(double uu, double rho, double B, double kel)
       if (denom_beta > 0.)
       {
         beta = safe_uu * (gam - 1.0) / denom_beta;
+      }
+      if (isfinite(beta))
+      {
+        beta = clamp_beta_value(beta);
       }
 
       double beta_crit_sq = beta_crit * beta_crit;
@@ -487,6 +586,10 @@ double thetae_func(double uu, double rho, double B, double kel)
       {
         beta = safe_uu * (gam - 1.0) / denom_beta;
       }
+      if (isfinite(beta))
+      {
+        beta = clamp_beta_value(beta);
+      }
       double safe_beta_crit = beta_crit;
       if (!(safe_beta_crit > 0.0) || !isfinite(safe_beta_crit))
       {
@@ -511,7 +614,12 @@ double thetae_func(double uu, double rho, double B, double kel)
     }
   }
 
-  if (in_high_sigma_region)
+  if (in_jet && jet_thetae > 0.0)
+  {
+    double thetae_upper = fmin(Thetae_max, THETAE_HARD_MAX);
+    thetae = clamp_thetae_limits(jet_thetae, thetae_floor, thetae_upper);
+  }
+  else if (in_high_sigma_region)
   {
     double thetae_const = constant_beta_thetae(safe_rho, safe_B);
     if (thetae_const > 0.0)
@@ -520,7 +628,8 @@ double thetae_func(double uu, double rho, double B, double kel)
     }
   }
 
-  thetae = clamp_thetae_limits(thetae, thetae_floor, Thetae_max);
+  double thetae_upper = fmin(Thetae_max, THETAE_HARD_MAX);
+  thetae = clamp_thetae_limits(thetae, thetae_floor, thetae_upper);
   return thetae;
 }
 
@@ -530,7 +639,6 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
 
   double Ucov[NDIM], Bcov[NDIM];
   double Bp[NDIM], Vcon[NDIM], Vfac, VdotV, UdotBp;
-  double sig;
 
   Bp[1] = p[B1][i][j][k];
   Bp[2] = p[B2][i][j][k];
@@ -564,17 +672,22 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
             Bcon[2] * Bcov[2] + Bcon[3] * Bcov[3]) *
        B_unit;
 
-  *Ne = p[KRHO][i][j][k] * Ne_unit;
-  *Thetae = thetae_func(p[UU][i][j][k], p[KRHO][i][j][k], (*B) / B_unit, p[KEL][i][j][k]);
+  double rho = p[KRHO][i][j][k];
+  double uu = p[UU][i][j][k];
+  *Ne = rho * Ne_unit;
+  *Thetae = thetae_func(uu, rho, (*B) / B_unit, p[KEL][i][j][k]);
 
-  if (*Thetae > THETAE_MAX)
-    *Thetae = THETAE_MAX;
-
-  sig = pow(*B / B_unit, 2) / (*Ne / Ne_unit);
-  if ((with_electrons < 4 && sig > 1.) || i < 9)
-  {
+  double sig_unscaled = pow((*B) / B_unit, 2) / ((*Ne) / Ne_unit);
+  if (with_electrons < 3 && sig_unscaled > 1.)
     *Thetae = SMALL;
+
+  if (in_jet_region(rho, uu, (*B) / B_unit) && jet_ne_mult != 1.0)
+  {
+    *Ne *= jet_ne_mult;
   }
+
+  double thetae_upper = fmin(Thetae_max, THETAE_HARD_MAX);
+  *Thetae = clamp_thetae_limits(*Thetae, THETAE_MIN, thetae_upper);
 }
 
 void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
@@ -586,7 +699,6 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
   double Bp[NDIM], Vcon[NDIM], Vfac, VdotV, UdotBp;
   double gcon[NDIM][NDIM];
   double interp_scalar(const double X[NDIM], double ***var);
-  double sig;
 
   if (X_in_domain(X) == 0)
   {
@@ -633,14 +745,21 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
             Bcon[2] * Bcov[2] + Bcon[3] * Bcov[3]) *
        B_unit;
 
-  *Ne = rho * Ne_unit;
+  double Ne_local = rho * Ne_unit;
   *Thetae = thetae_func(uu, rho, (*B) / B_unit, kel);
-  if (*Thetae > THETAE_MAX)
-    *Thetae = THETAE_MAX;
 
-  sig = pow(*B / B_unit, 2) / (*Ne / Ne_unit);
-  if (with_electrons < 4 && sig > 1.)
+  double sig_unscaled = pow((*B) / B_unit, 2) / (Ne_local / Ne_unit);
+  if (with_electrons < 3 && sig_unscaled > 1.)
     *Thetae = SMALL;
+
+  if (in_jet_region(rho, uu, (*B) / B_unit) && jet_ne_mult != 1.0)
+  {
+    Ne_local *= jet_ne_mult;
+  }
+
+  *Ne = Ne_local;
+  double thetae_upper = fmin(Thetae_max, THETAE_HARD_MAX);
+  *Thetae = clamp_thetae_limits(*Thetae, THETAE_MIN, thetae_upper);
 }
 
 ////////////////////////////////// COORDINATES /////////////////////////////////
@@ -705,10 +824,19 @@ void init_data(int argc, char *argv[], Params *params)
     beta_crit_coefficient = params->beta_crit_coefficient;
     with_electrons = params->with_electrons;
     biasTuning = params->biasTuning;
-    Thetae_max = params->Thetae_max;
+    double thetae_cap = params->Thetae_max;
+    if (!isfinite(thetae_cap) || thetae_cap <= THETAE_MIN)
+    {
+      thetae_cap = THETAE_HARD_MAX;
+    }
+    Thetae_max = fmin(thetae_cap, THETAE_HARD_MAX);
     sigma_transition = params->sigma_transition;
     constant_beta_e0 = params->constant_beta_e0;
     constant_beta_e0_exponent = params->constant_beta_e0_exponent;
+    jet_sigma_cut = params->jet_sigma_cut;
+    jet_beta_cut = params->jet_beta_cut;
+    jet_thetae = params->jet_thetae;
+    jet_ne_mult = params->jet_ne_mult;
   }
   else
   {
@@ -785,8 +913,10 @@ void init_data(int argc, char *argv[], Params *params)
     {
       fprintf(stderr,
               "using mixed tp_over_te with trat_small = %g, trat_large = %g, sigma_transition = %g, "
-              "constant_beta_e0 = %g, constant_beta_e0_exponent = %g\n",
-              trat_small, trat_large, sigma_transition, constant_beta_e0, constant_beta_e0_exponent);
+              "constant_beta_e0 = %g, constant_beta_e0_exponent = %g, jet_sigma_cut = %g, "
+              "jet_beta_cut = %g, jet_thetae = %g, jet_ne_mult = %g\n",
+              trat_small, trat_large, sigma_transition, constant_beta_e0, constant_beta_e0_exponent,
+              jet_sigma_cut, jet_beta_cut, jet_thetae, jet_ne_mult);
     }
     else
     {
@@ -800,8 +930,10 @@ void init_data(int argc, char *argv[], Params *params)
     {
       fprintf(stderr,
               "using critical beta tp_over_te with beta_crit_coefficient = %g, beta_crit = %g, "
-              "sigma_transition = %g, constant_beta_e0 = %g, constant_beta_e0_exponent = %g\n",
-              beta_crit_coefficient, beta_crit, sigma_transition, constant_beta_e0, constant_beta_e0_exponent);
+              "sigma_transition = %g, constant_beta_e0 = %g, constant_beta_e0_exponent = %g, "
+              "jet_sigma_cut = %g, jet_beta_cut = %g, jet_thetae = %g, jet_ne_mult = %g\n",
+              beta_crit_coefficient, beta_crit, sigma_transition, constant_beta_e0, constant_beta_e0_exponent,
+              jet_sigma_cut, jet_beta_cut, jet_thetae, jet_ne_mult);
     }
     else
     {
@@ -1038,7 +1170,7 @@ void report_spectrum(int N_superph_made, Params *params)
   h5io_add_data_dbl(fid, "/params/LNUMIN", LNUMIN);
   h5io_add_data_dbl(fid, "/params/DLNU", DLNU);
   h5io_add_data_dbl(fid, "/params/THETAE_MIN", THETAE_MIN);
-  h5io_add_data_dbl(fid, "/params/THETAE_MAX", THETAE_MAX);
+  h5io_add_data_dbl(fid, "/params/THETAE_MAX", Thetae_max);
   h5io_add_data_dbl(fid, "/params/TP_OVER_TE", TP_OVER_TE);
   h5io_add_data_dbl(fid, "/params/WEIGHT_MIN", WEIGHT_MIN);
   h5io_add_data_dbl(fid, "/params/KAPPA", model_kappa);
@@ -1087,6 +1219,10 @@ void report_spectrum(int N_superph_made, Params *params)
       h5io_add_data_dbl(fid, "/params/electrons/sigma_transition", sigma_transition);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0", constant_beta_e0);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0_exponent", constant_beta_e0_exponent);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_sigma_cut", jet_sigma_cut);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_beta_cut", jet_beta_cut);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_thetae", jet_thetae);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_ne_mult", jet_ne_mult);
     }
   }
   else if (with_electrons == 3 || with_electrons == 5)
@@ -1098,6 +1234,10 @@ void report_spectrum(int N_superph_made, Params *params)
       h5io_add_data_dbl(fid, "/params/electrons/sigma_transition", sigma_transition);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0", constant_beta_e0);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0_exponent", constant_beta_e0_exponent);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_sigma_cut", jet_sigma_cut);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_beta_cut", jet_beta_cut);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_thetae", jet_thetae);
+      h5io_add_data_dbl(fid, "/params/electrons/jet_ne_mult", jet_ne_mult);
     }
   }
   h5io_add_data_int(fid, "/params/electrons/type", with_electrons);

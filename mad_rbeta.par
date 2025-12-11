@@ -1,0 +1,40 @@
+############################################
+# MAD + RBETA (NO JET)
+############################################
+
+# --- bias handling ---
+fit_bias          0          # do NOT tune bias
+do_find_bias      0
+bias              0.05       # fixed bias (safe default based on CRITBETA)
+
+fit_bias_ns       14000      # ignored when fit_bias = 0
+
+# --- photon count ---
+Ns                2e5
+
+# --- black hole + scaling ---
+MBH               6.5e9
+TP_OVER_TE        3
+M_unit            3.3971999999999996e+25
+
+# --- input / output ---
+dump              /work/vmo703/grmhd_dump_samples/Ma-0.5_4000.h5
+spectrum          /work/vmo703/igrmonty_outputs/m87/spectrum_MAD_RBETA.h5
+
+# --- RBETA electron heating ---
+with_electrons    2          # RBETA
+trat_small        1
+trat_large        20
+
+# --- CRITBETA params (ignored) ---
+beta_crit_coefficient  0.5
+beta_crit              1.0
+
+# --- jet params (ignored because with_electrons < 4) ---
+sigma_transition        2.0
+constant_beta_e0        0.1
+constant_beta_e0_exponent 0
+jet_sigma_cut           10
+jet_beta_cut            0.1
+jet_thetae              50
+jet_ne_mult             1

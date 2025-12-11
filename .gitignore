@@ -20,3 +20,6 @@ plot*.txt
 *.ppm
 *.mp4
 *.vtk
+
+# notes
+notebooks/*

@@ -2,6 +2,10 @@
 #include "compton.h"
 #include "model_radiation.h"
 
+static const double K0_MAX = 1.e6;
+static const double GAMMA_E_MIN = 1.0;
+static const double BETA_E_MIN = 1.e-12;
+
 /*
 
 Routines for treating Compton scattering via Monte Carlo.
@@ -30,6 +34,16 @@ void sample_scattered_photon(double k[4], double p[4], double kp[4])
 	// ke == photon momentum in elecron frame
 
 	boost(k, p, ke);
+	if (!(ke[0] > 0.0) || !isfinite(ke[0])) {
+		for (int n = 0; n < 4; n++)
+			kp[n] = k[n];
+		return;
+	}
+	if (ke[0] > K0_MAX) {
+		double scale = K0_MAX / ke[0];
+		for (int n = 0; n < 4; n++)
+			ke[n] *= scale;
+	}
 	if (ke[0] > 1.e-4) {
 		k0p = sample_klein_nishina(ke[0]);
 		cth = 1. - 1 / k0p + 1. / ke[0];
@@ -45,10 +59,15 @@ void sample_scattered_photon(double k[4], double p[4], double kp[4])
 	//v0y = ke[2] / ke[0];
 	//v0z = ke[3] / ke[0];
 
-  // Explicitly compute kemag instead of using ke[0] to ensure that photon
+	// Explicitly compute kemag instead of using ke[0] to ensure that photon
   // is created normalized and doesn't inherit light cone errors from the
   // original superphoton
   double kemag = sqrt(ke[1]*ke[1] + ke[2]*ke[2] + ke[3]*ke[3]);
+  if (!(kemag > 0.0) || !isfinite(kemag)) {
+    for (int n = 0; n < 4; n++)
+      kp[n] = k[n];
+    return;
+  }
   v0x = ke[1]/kemag;
   v0y = ke[2]/kemag;
   v0z = ke[3]/kemag;
@@ -99,19 +118,15 @@ void sample_scattered_photon(double k[4], double p[4], double kp[4])
 	boost(kpe, p, kp);
 
 	// quality control
-	if (kp[0] < 0 || isnan(kp[0])) {
-		fprintf(stderr, "in sample_scattered_photon:\n");
-		fprintf(stderr, "kp[0], kpe[0]: %g %g\n", kp[0], kpe[0]);
-		fprintf(stderr, "kpe: %g %g %g %g\n", kpe[0], kpe[1],
-			kpe[2], kpe[3]);
-		fprintf(stderr, "k:  %g %g %g %g\n", k[0], k[1], k[2],
-			k[3]);
-		fprintf(stderr, "ke: %g %g %g %g\n", ke[0], ke[1], ke[2],
-			ke[3]);
-		fprintf(stderr, "p:   %g %g %g %g\n", p[0], p[1], p[2],
-			p[3]);
-		fprintf(stderr, "kp:  %g %g %g %g\n", kp[0], kp[1], kp[2],
-			kp[3]);
+	if (!(kp[0] > 0.0) || !isfinite(kp[0])) {
+		for (int n = 0; n < 4; n++)
+			kp[n] = k[n];
+		return;
+	}
+	if (kp[0] > K0_MAX) {
+		double scale = K0_MAX / kp[0];
+		for (int n = 0; n < 4; n++)
+			kp[n] *= scale;
 	}
 
 	// done!
@@ -243,9 +258,32 @@ void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 	double v1x, v1y, v1z;
 	double v2x, v2y, v2z;
 	int sample_cnt = 0;
+	double k0_local = (k[0] > 0.0 && isfinite(k[0])) ? k[0] : fabs(k[0]);
+	if (!(k0_local > 0.0) || !isfinite(k0_local)) {
+		k0_local = 1.e-30;
+	}
 
-	do {
+	while (1) {
+		if (sample_cnt > 10000000) {
+			fprintf(stderr,
+				"in sample_electron mu, gamma_e, K, sigma_KN, x1: %g %g %g %g %g %g\n",
+				Thetae, mu, gamma_e, K, sigma_KN, x1);
+			// This is a kluge to prevent stalling for large values of \Theta_e 
+			Thetae *= 0.5;
+			sample_cnt = 0;
+		}
+
+		sample_cnt++;
 		sample_beta_distr(Thetae, &gamma_e, &beta_e);
+		if (!(gamma_e > GAMMA_E_MIN) || !isfinite(gamma_e)) {
+			gamma_e = GAMMA_E_MIN;
+		}
+		if (!isfinite(beta_e) || beta_e < 0.0) {
+			beta_e = sqrt(1. - 1. / (gamma_e * gamma_e));
+		}
+		if (beta_e < BETA_E_MIN)
+			beta_e = BETA_E_MIN;
+
 		mu = sample_mu_distr(beta_e);
 		// sometimes |mu| > 1 from roundoff error, fix it
 		if (mu > 1.)
@@ -254,7 +292,10 @@ void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 			mu = -1;
 
 		// frequency in electron rest frame
-		K = gamma_e * (1. - beta_e * mu) * k[0];
+		K = gamma_e * (1. - beta_e * mu) * k0_local;
+		if (!(K > 0.0) || !isfinite(K) || K > K0_MAX) {
+			continue;
+		}
 
 		// Avoid problems at small K
 		if (K < 1.e-3) {
@@ -269,18 +310,9 @@ void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 
 		x1 = monty_rand();
 
-		sample_cnt++;
-
-		if (sample_cnt > 10000000) {
-			fprintf(stderr,
-				"in sample_electron mu, gamma_e, K, sigma_KN, x1: %g %g %g %g %g %g\n",
-				Thetae, mu, gamma_e, K, sigma_KN, x1);
-			// This is a kluge to prevent stalling for large values of \Theta_e 
-			Thetae *= 0.5;
-			sample_cnt = 0;
-		}
-
-	} while (x1 >= sigma_KN);
+		if (x1 < sigma_KN)
+			break;
+	}
 
 	// first unit vector for coordinate system 
 	v0x = k[1];

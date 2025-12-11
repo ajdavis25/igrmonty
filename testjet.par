@@ -1,12 +1,12 @@
 # template parameter file
 
 fit_bias 1
-fit_bias_ns 14000
+fit_bias_ns 5000
 bias 0.05
 
-Ns 5e4
+Ns 5e3
 MBH 6.5e9
-M_unit 1.83e+27
+M_unit 5.543e+28
 TP_OVER_TE 3
 
 beta_crit_coefficient 0.5
@@ -15,7 +15,12 @@ beta_crit 1.0
 trat_small 1
 trat_large 20
 
-with_electrons 4  # 4 = RBETAwJET || 5 = CRITBETAwJET
+with_electrons 5  # 4 = RBETAwJET || 5 = CRITBETAwJET
 
 dump /work/vmo703/grmhd_dump_samples/Sa-0.5_4000.h5
 spectrum /work/vmo703/igrmonty_outputs/m87/spectrum_JET_Sa-0.5_4000.h5
+
+# jet heating controls (only used when with_electrons >= 4)
+sigma_transition 0.5
+constant_beta_e0 1.0
+constant_beta_e0_exponent 1.0

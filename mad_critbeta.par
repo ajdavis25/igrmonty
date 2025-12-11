@@ -1,0 +1,32 @@
+############################################
+# MAD + CRITBETA (baseline, no jet)
+############################################
+
+# --- general run settings ---
+fit_bias          1
+fit_bias_ns       14000
+bias              0.05
+
+Ns                2e5          # production-quality
+MBH               6.5e9
+TP_OVER_TE        3
+M_unit            2.8725000000000004e+25
+
+dump              /work/vmo703/grmhd_dump_samples/Ma-0.5_4000.h5
+spectrum          /work/vmo703/igrmonty_outputs/m87/spectrum_MAD_CRITBETA.h5
+
+# --- CRITBETA disk heating ---
+with_electrons          3        # 3 = CRITBETA
+beta_crit_coefficient   0.5
+beta_crit               1.0
+trat_small              1
+trat_large              20
+
+# --- jet parameters ignored, not used ---
+sigma_transition        2.0
+constant_beta_e0        0.1
+constant_beta_e0_exponent 0
+jet_sigma_cut           10
+jet_beta_cut            0.1
+jet_thetae              50
+jet_ne_mult             1

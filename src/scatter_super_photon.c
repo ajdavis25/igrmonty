@@ -17,6 +17,10 @@ void scatter_super_photon(struct of_photon *ph, struct of_photon *php,
   K_tetrad[NDIM], K_tetrad_p[NDIM], Bhatcon[NDIM], tmpK[NDIM];
   int k;
 
+  /*fprintf(stderr,
+  "SCATTER Thetae=%g Ne=%g B=%g sigma=%g nscatt=%d\n",
+  Thetae, Ne, B, (B*B)/Ne, ph->nscatt);*/
+
   /* quality control */
 
   if (isnan(ph->K[1])) {
@@ -90,6 +94,13 @@ void scatter_super_photon(struct of_photon *ph, struct of_photon *php,
      photon momentum Kp */
   sample_scattered_photon(K_tetrad, P, K_tetrad_p);
 
+  // DEBUG: check energy gain in the fluid (tetrad) frame
+  /*fprintf(stderr,
+          "POST-SCATTER energy K0_before=%g K0_after=%g\n",
+          K_tetrad[0], K_tetrad_p[0]);
+  fprintf(stderr,
+          "SCATTER weights w_parent=%g w_child=%g gain=%g\n",
+          ph->w, php->w, K_tetrad_p[0] / K_tetrad[0]);*/
 
   /* transform back to coordinate frame */
   tetrad_to_coordinate(Econ, K_tetrad_p, php->K);
@@ -125,8 +136,6 @@ void scatter_super_photon(struct of_photon *ph, struct of_photon *php,
 
   php->E = php->E0s = -tmpK[0];
   php->L = tmpK[3];
-  php->tau_abs = 0.;
-  php->tau_scatt = 0.;
   php->b0 = B;
 
   php->X1i = ph->X[1];

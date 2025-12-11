@@ -1,0 +1,32 @@
+############################################
+# MAD + CRITBETAwJET (strong jet heating)
+############################################
+
+fit_bias          0
+fit_bias_ns       14000
+bias              0.2       # was 0.05
+do_find_bias      0         # skip the auto bias search
+
+Ns                2e5
+MBH               6.5e9
+TP_OVER_TE        3
+M_unit            2.4229e+25
+
+dump              /work/vmo703/grmhd_dump_samples/Ma-0.5_4000.h5
+spectrum          /work/vmo703/igrmonty_outputs/m87/spectrum_MAD_CRITBETA_strongJET.h5
+
+# --- CRITBETA disk heating ---
+with_electrons          5        
+beta_crit_coefficient   0.5
+beta_crit               1.0
+trat_small              1
+trat_large              20
+
+# --- STRONG jet-only heating ---
+sigma_transition        1.0
+constant_beta_e0        0.1
+constant_beta_e0_exponent 1.0
+jet_sigma_cut           50
+jet_beta_cut            0.1
+jet_thetae              200
+jet_ne_mult             1

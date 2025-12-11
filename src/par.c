@@ -4,14 +4,15 @@
 #include "model_radiation.h"
 
 // call this to set defaults
-void load_par_from_argv(int argc, char *argv[], Params *params) {
+void load_par_from_argv(int argc, char *argv[], Params *params)
+{
 
   // set default values here
-  params->seed        = -1; // will use time() to randomize seed if set to -1
+  params->seed = -1; // will use time() to randomize seed if set to -1
 
-  params->biasTuning  = 1.;
-  params->fitBias     = 0;
-  params->fitBiasNs   = 10000.;
+  params->biasTuning = 1.;
+  params->fitBias = 0;
+  params->fitBiasNs = 10000.;
   params->targetRatio = M_SQRT2;
 
   params->TP_OVER_TE = 3.;
@@ -20,35 +21,45 @@ void load_par_from_argv(int argc, char *argv[], Params *params) {
   params->with_electrons = 2;
   params->trat_small = 1.;
   params->trat_large = 10.;
-  params->Thetae_max = 1.e100;
+  params->Thetae_max = 1.e3;
   params->sigma_transition = 1.0;
   params->constant_beta_e0 = 0.1;
   params->constant_beta_e0_exponent = 1.0;
+  params->jet_sigma_cut = -1.0;
+  params->jet_beta_cut = -1.0;
+  params->jet_thetae = 0.0;
+  params->jet_ne_mult = 1.0;
 
   // Load parameters
-  for (int i=0; i<argc-1; ++i) {
-    if ( strcmp(argv[i], "-par") == 0 ) {
-      load_par(argv[i+1], params);
+  for (int i = 0; i < argc - 1; ++i)
+  {
+    if (strcmp(argv[i], "-par") == 0)
+    {
+      load_par(argv[i + 1], params);
     }
   }
 }
 
 // sets default values for elements of params (if desired) and loads
 // from par file 'fname'
-void load_par (const char *fname, Params *params) {
- 
+void load_par(const char *fname, Params *params)
+{
+
   char line[256];
   FILE *fp = fopen(fname, "r");
 
-  if (fp == NULL) {
+  if (fp == NULL)
+  {
     fprintf(stderr, "! unable to load parameter file '%s'. (%d: %s)\n", fname, errno, strerror(errno));
     exit(-1);
   }
 
   // modify parameters/types below
-  while (fgets(line, 255, fp) != NULL) {
+  while (fgets(line, 255, fp) != NULL)
+  {
 
-    if (line[0] == '#') continue; 
+    if (line[0] == '#')
+      continue;
 
     read_param(line, "seed", &(params->seed), TYPE_DBL);
 
@@ -59,15 +70,15 @@ void load_par (const char *fname, Params *params) {
     read_param(line, "spectrum", (void *)(params->spectrum), TYPE_STR);
 
     // bias
-    read_param(line, "bias",        &(params->biasTuning),  TYPE_DBL);
-    read_param(line, "fit_bias",    &(params->fitBias),     TYPE_INT);
-    read_param(line, "fit_bias_ns", &(params->fitBiasNs),   TYPE_DBL);
-    read_param(line, "ratio",       &(params->targetRatio), TYPE_DBL);
+    read_param(line, "bias", &(params->biasTuning), TYPE_DBL);
+    read_param(line, "fit_bias", &(params->fitBias), TYPE_INT);
+    read_param(line, "fit_bias_ns", &(params->fitBiasNs), TYPE_DBL);
+    read_param(line, "ratio", &(params->targetRatio), TYPE_DBL);
 
     // two point model
     read_param(line, "lnumin", &(params->lnumin), TYPE_DBL);
     read_param(line, "lnumax", &(params->lnumax), TYPE_DBL);
-    read_param(line, "alpha_spec", &(params->alpha_spec), TYPE_DBL);    
+    read_param(line, "alpha_spec", &(params->alpha_spec), TYPE_DBL);
 
     // electron temperature models
     read_param(line, "TP_OVER_TE", &(params->TP_OVER_TE), TYPE_DBL);
@@ -80,6 +91,10 @@ void load_par (const char *fname, Params *params) {
     read_param(line, "sigma_transition", &(params->sigma_transition), TYPE_DBL);
     read_param(line, "constant_beta_e0", &(params->constant_beta_e0), TYPE_DBL);
     read_param(line, "constant_beta_e0_exponent", &(params->constant_beta_e0_exponent), TYPE_DBL);
+    read_param(line, "jet_sigma_cut", &(params->jet_sigma_cut), TYPE_DBL);
+    read_param(line, "jet_beta_cut", &(params->jet_beta_cut), TYPE_DBL);
+    read_param(line, "jet_thetae", &(params->jet_thetae), TYPE_DBL);
+    read_param(line, "jet_ne_mult", &(params->jet_ne_mult), TYPE_DBL);
 
     // set model parameters
     try_set_radiation_parameter(line);
@@ -88,11 +103,11 @@ void load_par (const char *fname, Params *params) {
   fclose(fp);
 
   params->loaded = 1;
-
 }
 
 // loads value -> (type *)*val if line corresponds to (key,value)
-void read_param (const char *line, const char *key, void *val, int type) {
+void read_param(const char *line, const char *key, void *val, int type)
+{
 
   // silence valgrind warnings
   char word[256] = {0};
@@ -100,8 +115,10 @@ void read_param (const char *line, const char *key, void *val, int type) {
 
   sscanf(line, "%s %s", word, value);
 
-  if (strcmp(word, key) == 0) {
-    switch (type) {
+  if (strcmp(word, key) == 0)
+  {
+    switch (type)
+    {
     case TYPE_INT:
       sscanf(value, "%d", (int *)val);
       break;
@@ -115,6 +132,4 @@ void read_param (const char *line, const char *key, void *val, int type) {
       fprintf(stderr, "! attempt to load unknown type '%d'.\n", type);
     }
   }
-
 }
-

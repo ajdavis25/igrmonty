@@ -13,7 +13,8 @@
 #define TYPE_STR (3)
 
 // feel free to change any part of this structure
-typedef struct params_t {
+typedef struct params_t
+{
   int seed;
 
   double Ns;
@@ -24,7 +25,7 @@ typedef struct params_t {
 
   // bias
   double biasTuning;
-  int    fitBias;
+  int fitBias;
   double fitBiasNs;
   double targetRatio;
 
@@ -42,6 +43,10 @@ typedef struct params_t {
   double sigma_transition;
   double constant_beta_e0;
   double constant_beta_e0_exponent;
+  double jet_sigma_cut;
+  double jet_beta_cut;
+  double jet_thetae;
+  double jet_ne_mult;
 
   char loaded;
 } Params;

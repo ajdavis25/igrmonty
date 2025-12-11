@@ -1,9 +1,9 @@
 seed -1
-Ns 20000.0
+Ns 200000.0
 MBH 6500000000.0
-M_unit 1.29935113e+29
+M_unit 1.34405060e+29
 dump /work/vmo703/grmhd_dump_samples/Sa-0.5_4000.h5
-spectrum /work/vmo703/igrmonty_outputs/m87/spectrum_Sa-0.5_4000_RBETA_pos0_trial02.h5
+spectrum /work/vmo703/igrmonty_outputs/m87/spectrum_Sa-0.5_4000_CRITBETA_pos0_trial03.h5
 
 fit_bias 1
 fit_bias_ns 50000
@@ -13,7 +13,7 @@ ratio 1.4142135623730951
 TP_OVER_TE 3.0
 beta_crit 1.0
 beta_crit_coefficient 0.5
-with_electrons 2
+with_electrons 3
 trat_small 1
 trat_large 20
 Thetae_max 1e100

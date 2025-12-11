@@ -41,10 +41,6 @@ static inline int thetae_in_valid_range(double *Thetae)
   {
     return 0;
   }
-  if (*Thetae > THETAE_MAX)
-  {
-    *Thetae = THETAE_MAX;
-  }
   return 1;
 }
 
