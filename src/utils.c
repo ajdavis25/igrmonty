@@ -1,5 +1,106 @@
 
 #include "decs.h"
+#include <string.h>
+
+#define MAX_INIT_TRIES 8
+
+static inline void zero_photon(struct of_photon *ph)
+{
+  memset(ph, 0, sizeof(*ph));
+}
+
+static int photon_bad_state(const struct of_photon *ph)
+{
+  if (IS_BAD(ph->w) || ph->w <= 0.0) return 1;
+  if (IS_BAD(ph->E) || IS_BAD(ph->E0) || IS_BAD(ph->E0s)) return 1;
+  for (int mu = 0; mu < NDIM; mu++)
+  {
+    if (IS_BAD(ph->X[mu]) || IS_BAD(ph->K[mu])) return 1;
+  }
+  return 0;
+}
+
+static int validate_photon_init(struct of_photon *ph, int i, int j, int k)
+{
+#ifndef DEBUG_WJET
+  (void)i;
+  (void)j;
+  (void)k;
+#endif
+  if (photon_bad_state(ph))
+  {
+#pragma omp atomic
+    N_init_reject_total++;
+#pragma omp atomic
+    N_init_reject_state++;
+    return 0;
+  }
+
+  if (!X_in_domain(ph->X))
+  {
+#pragma omp atomic
+    N_init_reject_total++;
+#pragma omp atomic
+    N_init_reject_x++;
+#ifdef DEBUG_WJET
+    double r, th;
+    bl_coord(ph->X, &r, &th);
+    fprintf(stderr,
+            "DEBUG_WJET init_reject: X outside domain i=%d j=%d k=%d X=%g %g %g %g r=%g th=%g\n",
+            i, j, k, ph->X[0], ph->X[1], ph->X[2], ph->X[3], r, th);
+#endif
+    return 0;
+  }
+
+  double gcov[NDIM][NDIM], gcon[NDIM][NDIM];
+  gcov_func(ph->X, gcov);
+  gcon_func(gcov, gcon);
+  int bad_metric = 0;
+  MUNULOOP
+  {
+    if (IS_BAD(gcov[mu][nu]) || IS_BAD(gcon[mu][nu]))
+    {
+      bad_metric = 1;
+    }
+  }
+  if (bad_metric || IS_BAD(gcon[0][0]) || !(gcon[0][0] < 0.0))
+  {
+#pragma omp atomic
+    N_init_reject_total++;
+#pragma omp atomic
+    N_init_reject_metric++;
+#ifdef DEBUG_WJET
+    double r, th;
+    bl_coord(ph->X, &r, &th);
+    fprintf(stderr,
+            "DEBUG_WJET init_reject: bad metric i=%d j=%d k=%d X=%g %g %g %g r=%g th=%g gcon00=%g\n",
+            i, j, k, ph->X[0], ph->X[1], ph->X[2], ph->X[3], r, th, gcon[0][0]);
+#endif
+    return 0;
+  }
+
+  double Ne, Thetae, B;
+  double Ucon[NDIM], Ucov[NDIM], Bcon[NDIM], Bcov[NDIM];
+  get_fluid_params(ph->X, gcov, &Ne, &Thetae, &B, Ucon, Ucov, Bcon, Bcov);
+  double nu = get_fluid_nu(ph->X, ph->K, Ucov, ph, 0);
+  if (IS_BAD(nu) || !(nu > 0.0))
+  {
+#pragma omp atomic
+    N_init_reject_total++;
+#pragma omp atomic
+    N_init_reject_nu++;
+#ifdef DEBUG_WJET
+    double r, th;
+    bl_coord(ph->X, &r, &th);
+    fprintf(stderr,
+            "DEBUG_WJET init_reject: invalid nu i=%d j=%d k=%d nu=%g X=%g %g %g %g r=%g th=%g Ne=%g Thetae=%g B=%g\n",
+            i, j, k, nu, ph->X[0], ph->X[1], ph->X[2], ph->X[3], r, th, Ne, Thetae, B);
+#endif
+    return 0;
+  }
+
+  return 1;
+}
 
 void reset_state(int recph)
 {
@@ -15,6 +116,11 @@ void reset_state(int recph)
   
   Ns_scale           = 1.0;	
   N_superph_made     = 0.0;  
+  N_init_reject_total = 0;
+  N_init_reject_state = 0;
+  N_init_reject_x = 0;
+  N_init_reject_metric = 0;
+  N_init_reject_nu = 0;
 }      
 
 void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
@@ -70,9 +176,26 @@ void make_super_photon(struct of_photon *ph, int *quit_flag)
     *quit_flag = 1;
   }
 
-  sample_origin_photon(ph);
+  int ok = 0;
+  for (int attempt = 0; attempt < MAX_INIT_TRIES; attempt++)
+  {
+    zero_photon(ph);
+    sample_origin_photon(ph);
+    if (validate_photon_init(ph, 0, 0, 0))
+    {
+      ok = 1;
+      break;
+    }
+  }
+  if (!ok)
+  {
+    zero_photon(ph);
+    return;
+  }
 #else
 
+  int i_local, j_local, k_local;
+  double dnmax_local;
   #pragma omp critical
   {
     if (zone_i != N1) {
@@ -81,12 +204,31 @@ void make_super_photon(struct of_photon *ph, int *quit_flag)
       }
       n2gen--;
     }
+    i_local = zone_i;
+    j_local = zone_j;
+    k_local = zone_k;
+    dnmax_local = dnmax;
   }
 
-  if (zone_i == N1) {
+  if (i_local == N1) {
     *quit_flag = 1;
   } else {
-    sample_zone_photon(zone_i, zone_j, zone_k, dnmax, ph);
+    int ok = 0;
+    for (int attempt = 0; attempt < MAX_INIT_TRIES; attempt++)
+    {
+      zero_photon(ph);
+      sample_zone_photon(i_local, j_local, k_local, dnmax_local, ph);
+      if (validate_photon_init(ph, i_local, j_local, k_local))
+      {
+        ok = 1;
+        break;
+      }
+    }
+    if (!ok)
+    {
+      zero_photon(ph);
+      return;
+    }
   }
 
 #endif // EMIT_ORIGIN
@@ -359,6 +501,31 @@ void sample_zone_photon(int i, int j, int k, double dnmax, struct of_photon *ph)
 
   get_fluid_zone(i, j, k, &Ne, &Thetae, &Bmag, Ucon, Bcon);
 
+#ifdef DEBUG_WJET
+  static int init_log_count = 0;
+  if (init_log_count < 4)
+  {
+    double r, th_bl;
+    double gcov[NDIM][NDIM], gcon[NDIM][NDIM];
+    int bad_metric = 0;
+    bl_coord(ph->X, &r, &th_bl);
+    gcov_func(ph->X, gcov);
+    gcon_func(gcov, gcon);
+    MUNULOOP
+    {
+      if (IS_BAD(gcov[mu][nu]) || IS_BAD(gcon[mu][nu]))
+      {
+        bad_metric = 1;
+      }
+    }
+    fprintf(stderr,
+            "DEBUG_WJET init_sample[%d]: i=%d j=%d k=%d X=%g %g %g %g r=%g th=%g Ne=%g Thetae=%g B=%g bad_metric=%d gcon00=%g\n",
+            init_log_count, i, j, k, ph->X[0], ph->X[1], ph->X[2], ph->X[3],
+            r, th_bl, Ne, Thetae, Bmag, bad_metric, gcon[0][0]);
+    init_log_count++;
+  }
+#endif
+
 #ifdef MODEL_TRANSPARENT
 
   // monochromatic
@@ -531,5 +698,12 @@ void summary(FILE *file, const char *prefix)
             prefix ? prefix : "", deltatime,
             nmade,  umade,  N_superph_made / deltatime / 1e3,
             nscatt, uscatt, N_scatt / N_superph_made);
+    if (prefix && N_init_reject_total > 0)
+    {
+      fprintf(stderr,
+              "%sinit rejects total=%lld state=%lld xdomain=%lld metric=%lld nu=%lld\n",
+              prefix, N_init_reject_total, N_init_reject_state,
+              N_init_reject_x, N_init_reject_metric, N_init_reject_nu);
+    }
   }  
 }

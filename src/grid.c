@@ -95,6 +95,7 @@ void Xtoijk(const double X[NDIM], int *i, int *j, int *k, double del[NDIM])
 void ijktoX(int i, int j, int k, double *X)
 {
   // first do the naive thing 
+  X[0] = t;
   X[1] = startx[1] + (i+0.5)*dx[1];
   X[2] = startx[2] + (j+0.5)*dx[2];
   X[3] = startx[3] + (k+0.5)*dx[3];
@@ -118,6 +119,11 @@ void ijktoX(int i, int j, int k, double *X)
       xKS[1] = exp(x1) + mks3R0;
       xKS[2] = (M_PI*(1+1./tan((H0*M_PI)/2.)*tan(H0*M_PI*(-0.5+(MY1+(pow(2,MP0)*(-MY1+MY2))/pow(exp(x1)+R0,MP0))*(1-2*x2)+x2))))/2.;
       xKS[3] = x3;
+    } else {
+      xKS[0] = X[0];
+      xKS[1] = exp(X[1]);
+      xKS[2] = M_PI * X[2];
+      xKS[3] = X[3];
     }
     
     X[0] = xKS[0];

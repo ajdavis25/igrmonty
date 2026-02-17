@@ -28,7 +28,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 
 # input table of models (row-based)
-DEFAULT_CSV = REPO_ROOT / "data" / "munits_results.csv"
+DEFAULT_CSV = REPO_ROOT / "data" / "paper_output.csv"
 
 # GRMHD dump and output locations
 DUMP_DIR = REPO_ROOT / "grmhd_dump_samples"
@@ -132,7 +132,7 @@ def infer_electron_mode(model: str) -> int:
 
 def build_context(row: dict) -> dict:
     """build a context dict (metadata) for this tuning job from the CSV row."""
-    state = row["MAD/SANE"].upper()
+    state = row["state"].upper()
     if state not in STATE_DEFAULT_MUNIT:
         raise ValueError(f"Unexpected MAD/SANE value '{state}'")
 
@@ -841,7 +841,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Absolute tolerance in Jy (overrides relative tolerance when set).",
     )
 
-    parser.add_argument("--ns", type=float, default=2e5, help="Photon count for tuning runs.")
+    parser.add_argument("--ns", type=float, default=1e6, help="Photon count for tuning runs.")
     parser.add_argument("--mbh", type=float, default=6.5e9, help="Black hole mass in Msun.")
     parser.add_argument("--tp-over-te", type=float, default=3.0, help="TP_OVER_TE value.")
 
@@ -939,12 +939,28 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     row = load_row(args.csv, args.row)
     context = build_context(row)
 
-    munit_used = row.get("MunitUsed", "").strip()
+    pos = str(context["pos"]).strip()
+    munit_key = f"MunitUsed_pos{pos}"
+
+    munit_used = row.get(munit_key, "")
     default_munit: float
+
+    if isinstance(munit_used, str):
+        munit_used = munit_used.strip()
+
     if munit_used:
         try:
             default_munit = float(munit_used)
+            print(
+                f"[init] using CSV {munit_key}={default_munit:.4e}",
+                flush=True,
+            )
         except ValueError:
+            print(
+                f"[warn] invalid {munit_key}='{munit_used}', "
+                "falling back to state default",
+                flush=True,
+            )
             default_munit = STATE_DEFAULT_MUNIT[context["state"]]
     else:
         default_munit = STATE_DEFAULT_MUNIT[context["state"]]

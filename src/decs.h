@@ -114,6 +114,11 @@ extern int Ns;
 extern int N_superph_recorded, N_scatt;
 extern int record_photons, bad_bias, invalid_bias, quit_flag;
 extern double Ns_scale, N_superph_made;
+extern long long N_init_reject_total;
+extern long long N_init_reject_state;
+extern long long N_init_reject_x;
+extern long long N_init_reject_metric;
+extern long long N_init_reject_nu;
 
 /* HARM model globals */
 extern struct of_geom **geom;
@@ -159,6 +164,7 @@ extern double max_tau_scatt, Ladv, dMact, bias_norm, biasTuning;
 #define NULOOP for(int nu = 0; nu < NDIM; nu++)
 #define MUNULOOP for(int mu=0; mu < NDIM; mu++) \
                  for(int nu=0; nu < NDIM; nu++)
+#define IS_BAD(x) (!isfinite((x)))
 
 /** model-independent subroutines **/
 
@@ -221,7 +227,8 @@ void make_tetrad(double Ucon[NDIM], double Bhatcon[NDIM],
 
 /* functions related to basic radiation functions & physics */
   /* physics-independent */
-double get_fluid_nu(const double X[NDIM], const double K[NDIM], const double Ucov[NDIM]);
+double get_fluid_nu(const double X[NDIM], const double K[NDIM], const double Ucov[NDIM],
+                    const struct of_photon *ph, int nstep);
 double get_bk_angle(double X[NDIM], double K[NDIM], double Ucov[NDIM],
         double Bcov[NDIM], double B);
 double alpha_inv_scatt(double nu, double thetae, double Ne);
@@ -230,6 +237,15 @@ double alpha_inv_abs(double nu, double thetae, double Ne, double B,
 double Bnu_inv(double nu, double thetae);
 double jnu_inv(double nu, double thetae, double ne, double B,
          double theta);
+
+#ifdef DEBUG_WJET
+void wjet_debug_update(const double X[NDIM], double rho, double uu, double Ne,
+                       double Thetae, double B_cgs, double sigma, double beta,
+                       int in_jet, int with_electrons, double sigma_transition,
+                       double constant_beta_e0, double constant_beta_e0_exponent,
+                       double jet_sigma_cut, double jet_beta_cut,
+                       double jet_thetae, double jet_ne_mult);
+#endif
 
   /* emissivity */
 double jnu(double nu, double Ne, double Thetae, double B, double theta);

@@ -428,7 +428,7 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
   double sum_U = Ucon[0]+Ucon[1]+Ucon[2]+Ucon[3];
   // Following condition gets handled better above
   // (r < r_isco && fabs(Ucon[1]) < 1e-10) ||
-  if (get_fluid_nu(Kcon, Ucov) == 1. ||
+  if (get_fluid_nu(X, Kcon, Ucov, NULL, -1) == 1. ||
       fabs(fabs(dot_U) - 1.) > 1e-10 || sum_U < 0.1) {
     lower(bl_Ucon, bl_gcov, bl_Ucov);
     fprintf(stderr, "RIAF model problem at r, th, phi = %g %g %g\n", r, th, X[3]);
@@ -767,5 +767,4 @@ void report_spectrum(int N_superph_made, Params *params)
   H5Fclose(fid);
 
 }
-
 

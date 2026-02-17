@@ -52,6 +52,11 @@ double F[N_ESAMP + 1], wgt[N_ESAMP + 1], zwgt[N_ESAMP + 1];
 int Ns, N_superph_recorded, N_scatt;
 int record_photons, bad_bias, invalid_bias, quit_flag;
 double Ns_scale, N_superph_made;
+long long N_init_reject_total;
+long long N_init_reject_state;
+long long N_init_reject_x;
+long long N_init_reject_metric;
+long long N_init_reject_nu;
 struct of_spectrum spect[N_TYPEBINS][N_THBINS][N_EBINS] = { };
 
 double t;
@@ -262,4 +267,3 @@ int main(int argc, char *argv[])
 
   return bad_bias;
 }
-

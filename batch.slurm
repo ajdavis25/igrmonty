@@ -5,9 +5,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=80
-#SBATCH --time=2-00:00:00
+#SBATCH --time=10-00:00:00
 #SBATCH --partition=compute2
-#SBATCH --array=10-17%10
+#SBATCH --array=0-337%20
 
 # optional overrides when submitting:
 #   sbatch --export=RUN_STATE=SANE,RUN_DUMPS="4000 4200" igrmonty/batch.slurm
@@ -23,7 +23,7 @@ module load hdf5/1.12.0
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export LD_LIBRARY_PATH=/work/vmo703/aricarte/gsl-1.16/lib:/work/vmo703/aricarte/gsl-1.16/lib64:$LD_LIBRARY_PATH
 
-CSV=/work/vmo703/data/munits_results.csv
+CSV=/work/vmo703/data/paper_output.csv
 NROWS=$(($(wc -l < "$CSV") - 1))
 RUN_STATE="${RUN_STATE:-ALL}"
 RUN_DUMPS="${RUN_DUMPS:-}"
@@ -32,7 +32,7 @@ ROWS_PER_JOB=${ROWS_PER_JOB:-1}
 CHUNK_INDEX=${SLURM_ARRAY_TASK_ID}
 CHUNK_START=$((CHUNK_INDEX * ROWS_PER_JOB))
 if (( CHUNK_START >= NROWS )); then
-  echo "Chunk $CHUNK_INDEX beyond available rows ($NROWS); skipping."
+  echo "chunk $CHUNK_INDEX beyond available rows ($NROWS); skipping."
   exit 0
 fi
 CHUNK_END=$((CHUNK_START + ROWS_PER_JOB - 1))

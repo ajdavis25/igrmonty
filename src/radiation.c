@@ -7,6 +7,7 @@ model-independent radiation-related utilities.
 #include "decs.h"
 #include "model_radiation.h"
 #include "par.h"
+#include "coordinates.h"
 
 // this file defines:
 //
@@ -25,6 +26,102 @@ double powerlaw_gamma_cut = 1.e10;
 double powerlaw_gamma_min = 1.e2;
 double powerlaw_gamma_max = 1.e5;
 double powerlaw_p = 3.25;
+
+#ifdef DEBUG_WJET
+struct wjet_debug_context {
+  int valid;
+  double X[NDIM];
+  double rho;
+  double uu;
+  double Ne;
+  double Thetae;
+  double B_cgs;
+  double sigma;
+  double beta;
+  int in_jet;
+  int with_electrons;
+  double sigma_transition;
+  double constant_beta_e0;
+  double constant_beta_e0_exponent;
+  double jet_sigma_cut;
+  double jet_beta_cut;
+  double jet_thetae;
+  double jet_ne_mult;
+};
+
+static struct wjet_debug_context wjet_ctx;
+#pragma omp threadprivate(wjet_ctx)
+
+void wjet_debug_update(const double X[NDIM], double rho, double uu, double Ne,
+                       double Thetae, double B_cgs, double sigma, double beta,
+                       int in_jet, int with_electrons, double sigma_transition,
+                       double constant_beta_e0, double constant_beta_e0_exponent,
+                       double jet_sigma_cut, double jet_beta_cut,
+                       double jet_thetae, double jet_ne_mult)
+{
+  wjet_ctx.valid = 1;
+  for (int mu = 0; mu < NDIM; mu++)
+  {
+    wjet_ctx.X[mu] = X[mu];
+  }
+  wjet_ctx.rho = rho;
+  wjet_ctx.uu = uu;
+  wjet_ctx.Ne = Ne;
+  wjet_ctx.Thetae = Thetae;
+  wjet_ctx.B_cgs = B_cgs;
+  wjet_ctx.sigma = sigma;
+  wjet_ctx.beta = beta;
+  wjet_ctx.in_jet = in_jet;
+  wjet_ctx.with_electrons = with_electrons;
+  wjet_ctx.sigma_transition = sigma_transition;
+  wjet_ctx.constant_beta_e0 = constant_beta_e0;
+  wjet_ctx.constant_beta_e0_exponent = constant_beta_e0_exponent;
+  wjet_ctx.jet_sigma_cut = jet_sigma_cut;
+  wjet_ctx.jet_beta_cut = jet_beta_cut;
+  wjet_ctx.jet_thetae = jet_thetae;
+  wjet_ctx.jet_ne_mult = jet_ne_mult;
+}
+
+static void wjet_debug_zone_indices(const double X[NDIM],
+                                    int *i_raw, int *j_raw, int *k_raw,
+                                    int *i_clamped, int *j_clamped, int *k_clamped,
+                                    double del[NDIM])
+{
+  double XG[NDIM] = { X[0], X[1], X[2], X[3] };
+  double phi = XG[3];
+
+  if (METRIC_eKS && METRIC_MKS3)
+  {
+    const double Xks[4] = { X[0], exp(X[1]), M_PI * X[2], X[3] };
+    const double H0 = mks3H0;
+    const double MY1 = mks3MY1;
+    const double MY2 = mks3MY2;
+    const double MP0 = mks3MP0;
+    const double KSx1 = Xks[1];
+    const double KSx2 = Xks[2];
+    XG[0] = Xks[0];
+    XG[1] = log(Xks[1] - mks3R0);
+    XG[2] = (-(H0 * pow(KSx1, MP0) * M_PI) - pow(2., 1. + MP0) * H0 * MY1 * M_PI +
+             2. * H0 * pow(KSx1, MP0) * MY1 * M_PI + pow(2., 1. + MP0) * H0 * MY2 * M_PI +
+             2. * pow(KSx1, MP0) * atan(((-2. * KSx2 + M_PI) * tan((H0 * M_PI) / 2.)) / M_PI)) /
+            (2. * H0 * (-pow(KSx1, MP0) - pow(2., 1 + MP0) * MY1 + 2. * pow(KSx1, MP0) * MY1 +
+                        pow(2., 1. + MP0) * MY2) * M_PI);
+    XG[3] = Xks[3];
+  }
+
+  if (stopx[3] > 0.0)
+  {
+    phi = fmod(XG[3], stopx[3]);
+    if (phi < 0.0) phi += stopx[3];
+  }
+
+  *i_raw = (int)((XG[1] - startx[1]) / dx[1] - 0.5 + 1000) - 1000;
+  *j_raw = (int)((XG[2] - startx[2]) / dx[2] - 0.5 + 1000) - 1000;
+  *k_raw = (int)((phi  - startx[3]) / dx[3] - 0.5 + 1000) - 1000;
+
+  Xtoijk(X, i_clamped, j_clamped, k_clamped, del);
+}
+#endif
 
 
 void try_set_radiation_parameter(const char *line)
@@ -202,7 +299,8 @@ double kappa_es(double nu, double Thetae)
 }
 
 // get frequency in fluid frame, in Hz
-double get_fluid_nu(const double X[NDIM], const double K[NDIM], const double Ucov[NDIM])
+double get_fluid_nu(const double X[NDIM], const double K[NDIM], const double Ucov[NDIM],
+                    const struct of_photon *ph, int nstep)
 {
 	// in electron rest-mass units 
 	double energy = -(K[0]*Ucov[0] + K[1]*Ucov[1] + K[2]*Ucov[2] + K[3]*Ucov[3]);
@@ -210,7 +308,106 @@ double get_fluid_nu(const double X[NDIM], const double K[NDIM], const double Uco
   // in Hz
 	double nu = energy * ME * CL * CL / HPL;
 
-	if (isnan(energy)) {
+#ifdef DEBUG_WJET
+  int bad = 0;
+  double gcov[NDIM][NDIM];
+  double gcon[NDIM][NDIM];
+  double Ucon[NDIM] = {0.};
+  double udotu = 0.0;
+  gcov_func(X, gcov);
+  gcon_func(gcov, gcon);
+
+  MUNULOOP
+  {
+    if (IS_BAD(gcov[mu][nu]) || IS_BAD(gcon[mu][nu]))
+    {
+      bad = 1;
+    }
+  }
+
+  MULOOP
+  {
+    if (IS_BAD(K[mu]) || IS_BAD(Ucov[mu]))
+    {
+      bad = 1;
+    }
+    for (int nu = 0; nu < NDIM; nu++)
+    {
+      Ucon[mu] += gcon[mu][nu] * Ucov[nu];
+    }
+    udotu += Ucon[mu] * Ucov[mu];
+  }
+
+  if (IS_BAD(udotu) || fabs(udotu + 1.0) > 1e-2)
+  {
+    bad = 1;
+  }
+  if (IS_BAD(energy) || IS_BAD(nu) || !(nu > 0.0))
+  {
+    bad = 1;
+  }
+
+  if (bad)
+  {
+    fprintf(stderr, "DEBUG_WJET get_fluid_nu: invalid state\n");
+    if (ph)
+    {
+      fprintf(stderr,
+              "ph_ptr=%p nstep=%d nscatt=%d w=%g E=%g E0=%g E0s=%g\n",
+              (void *)ph, nstep, ph->nscatt, ph->w, ph->E, ph->E0, ph->E0s);
+    }
+    else
+    {
+      fprintf(stderr, "ph_ptr=(null) nstep=%d\n", nstep);
+    }
+    int i_raw = 0, j_raw = 0, k_raw = 0, i_clamped = 0, j_clamped = 0, k_clamped = 0;
+    double del[NDIM] = {0.0};
+    wjet_debug_zone_indices(X, &i_raw, &j_raw, &k_raw, &i_clamped, &j_clamped, &k_clamped, del);
+    const int boundary_hit =
+        (i_raw < 0 || j_raw < 0 || k_raw < 0 ||
+         i_raw > N1 - 2 || j_raw > N2 - 2 || k_raw > N3 - 1 ||
+         i_clamped <= 0 || j_clamped <= 0 || i_clamped >= N1 - 2 || j_clamped >= N2 - 2);
+    fprintf(stderr, "X: %g %g %g %g\n", X[0], X[1], X[2], X[3]);
+    fprintf(stderr, "zone raw=(%d,%d,%d) clamp=(%d,%d,%d) del=(%g,%g,%g) boundary_hit=%d\n",
+            i_raw, j_raw, k_raw, i_clamped, j_clamped, k_clamped,
+            del[1], del[2], del[3], boundary_hit);
+    fprintf(stderr, "K: %g %g %g %g\n", K[0], K[1], K[2], K[3]);
+    fprintf(stderr, "Ucov: %g %g %g %g\n", Ucov[0], Ucov[1], Ucov[2], Ucov[3]);
+    fprintf(stderr, "Ucon: %g %g %g %g\n", Ucon[0], Ucon[1], Ucon[2], Ucon[3]);
+    fprintf(stderr, "udotu=%g energy=%g nu=%g\n", udotu, energy, nu);
+    fprintf(stderr,
+            "gcov: %g %g %g %g %g %g %g %g %g %g\n",
+            gcov[0][0], gcov[0][1], gcov[0][2], gcov[0][3],
+            gcov[1][1], gcov[1][2], gcov[1][3],
+            gcov[2][2], gcov[2][3],
+            gcov[3][3]);
+    fprintf(stderr, "gcon00=%g\n", gcon[0][0]);
+    if (wjet_ctx.valid)
+    {
+      fprintf(stderr,
+              "wjet_ctx: rho=%g uu=%g Ne=%g Thetae=%g B_cgs=%g sigma=%g beta=%g in_jet=%d\n",
+              wjet_ctx.rho, wjet_ctx.uu, wjet_ctx.Ne, wjet_ctx.Thetae,
+              wjet_ctx.B_cgs, wjet_ctx.sigma, wjet_ctx.beta, wjet_ctx.in_jet);
+      fprintf(stderr,
+              "wjet_params: with_electrons=%d sigma_transition=%g constant_beta_e0=%g constant_beta_e0_exponent=%g "
+              "jet_sigma_cut=%g jet_beta_cut=%g jet_thetae=%g jet_ne_mult=%g\n",
+              wjet_ctx.with_electrons, wjet_ctx.sigma_transition,
+              wjet_ctx.constant_beta_e0, wjet_ctx.constant_beta_e0_exponent,
+              wjet_ctx.jet_sigma_cut, wjet_ctx.jet_beta_cut,
+              wjet_ctx.jet_thetae, wjet_ctx.jet_ne_mult);
+      fprintf(stderr, "wjet_ctx_X: %g %g %g %g\n",
+              wjet_ctx.X[0], wjet_ctx.X[1], wjet_ctx.X[2], wjet_ctx.X[3]);
+    }
+    else
+    {
+      fprintf(stderr, "wjet_ctx: unset\n");
+    }
+    // For DEBUG_WJET runs, report and allow caller to drop/skip photon.
+    return -1.0;
+  }
+#endif
+
+	if (IS_BAD(energy)) {
 		fprintf(stderr, "isnan get_fluid_nu, K: %g %g %g %g\n",
 			K[0], K[1], K[2], K[3]);
 		fprintf(stderr, "isnan get_fluid_nu, X: %g %g %g %g\n",

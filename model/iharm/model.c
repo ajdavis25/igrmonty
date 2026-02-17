@@ -403,6 +403,62 @@ static inline double clamp_beta_value(double beta)
   return beta;
 }
 
+#ifdef DEBUG_WJET
+static void debug_wjet_abort_metric(const char *stage, const double X[NDIM],
+                                    const double gcov[NDIM][NDIM],
+                                    const double gcon[NDIM][NDIM])
+{
+  double r = 0.0;
+  double th = 0.0;
+  bl_coord(X, &r, &th);
+  fprintf(stderr, "DEBUG_WJET %s: bad metric\n", stage);
+  fprintf(stderr, "X: %g %g %g %g r=%g th=%g\n", X[0], X[1], X[2], X[3], r, th);
+  fprintf(stderr,
+          "gcov: %g %g %g %g %g %g %g %g %g %g\n",
+          gcov[0][0], gcov[0][1], gcov[0][2], gcov[0][3],
+          gcov[1][1], gcov[1][2], gcov[1][3],
+          gcov[2][2], gcov[2][3],
+          gcov[3][3]);
+  fprintf(stderr, "gcon00=%g\n", gcon[0][0]);
+  exit(EXIT_FAILURE);
+}
+
+static void debug_wjet_abort_prims(const char *stage, const double X[NDIM],
+                                  double rho, double uu, double kel,
+                                  const double Bp[NDIM], const double Vcon[NDIM])
+{
+  double r = 0.0;
+  double th = 0.0;
+  bl_coord(X, &r, &th);
+  fprintf(stderr, "DEBUG_WJET %s: bad interpolated primitives\n", stage);
+  fprintf(stderr, "X: %g %g %g %g r=%g th=%g\n", X[0], X[1], X[2], X[3], r, th);
+  fprintf(stderr, "rho=%g uu=%g kel=%g\n", rho, uu, kel);
+  fprintf(stderr, "Bp: %g %g %g\n", Bp[1], Bp[2], Bp[3]);
+  fprintf(stderr, "Vcon: %g %g %g\n", Vcon[1], Vcon[2], Vcon[3]);
+  exit(EXIT_FAILURE);
+}
+
+static void debug_wjet_abort_state(const char *stage, const double X[NDIM],
+                                  double rho, double uu, double Ne, double Thetae,
+                                  double B, double sigma, double beta, int in_jet,
+                                  const double Ucon[NDIM], const double Ucov[NDIM])
+{
+  double r = 0.0;
+  double th = 0.0;
+  double udotu = 0.0;
+  MULOOP udotu += Ucon[mu] * Ucov[mu];
+  bl_coord(X, &r, &th);
+  fprintf(stderr, "DEBUG_WJET %s: bad fluid state\n", stage);
+  fprintf(stderr, "X: %g %g %g %g r=%g th=%g\n", X[0], X[1], X[2], X[3], r, th);
+  fprintf(stderr, "rho=%g uu=%g Ne=%g Thetae=%g B=%g\n", rho, uu, Ne, Thetae, B);
+  fprintf(stderr, "sigma=%g beta=%g in_jet=%d\n", sigma, beta, in_jet);
+  fprintf(stderr, "Ucon: %g %g %g %g\n", Ucon[0], Ucon[1], Ucon[2], Ucon[3]);
+  fprintf(stderr, "Ucov: %g %g %g %g\n", Ucov[0], Ucov[1], Ucov[2], Ucov[3]);
+  fprintf(stderr, "udotu=%g\n", udotu);
+  exit(EXIT_FAILURE);
+}
+#endif
+
 static inline double constant_beta_thetae(double safe_rho, double safe_B)
 {
   if (!(constant_beta_e0 > 0.0))
@@ -640,19 +696,52 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
   double Ucov[NDIM], Bcov[NDIM];
   double Bp[NDIM], Vcon[NDIM], Vfac, VdotV, UdotBp;
 
+  Bp[0] = 0.0;
   Bp[1] = p[B1][i][j][k];
   Bp[2] = p[B2][i][j][k];
   Bp[3] = p[B3][i][j][k];
 
+  Vcon[0] = 0.0;
   Vcon[1] = p[U1][i][j][k];
   Vcon[2] = p[U2][i][j][k];
   Vcon[3] = p[U3][i][j][k];
+
+  double rho = p[KRHO][i][j][k];
+  double uu = p[UU][i][j][k];
+  double kel = p[KEL][i][j][k];
+
+#ifdef DEBUG_WJET
+  double Xzone_dbg[NDIM] = {0.};
+  ijktoX(i, j, k, Xzone_dbg);
+  if (IS_BAD(rho) || IS_BAD(uu) || IS_BAD(kel) ||
+      IS_BAD(Bp[1]) || IS_BAD(Bp[2]) || IS_BAD(Bp[3]) ||
+      IS_BAD(Vcon[1]) || IS_BAD(Vcon[2]) || IS_BAD(Vcon[3]) ||
+      !(rho > 0.0) || uu < 0.0)
+  {
+    debug_wjet_abort_prims("get_fluid_zone", Xzone_dbg, rho, uu, kel, Bp, Vcon);
+  }
+#endif
 
   // Get Ucov
   VdotV = 0.;
   for (int l = 1; l < NDIM; l++)
     for (int m = 1; m < NDIM; m++)
       VdotV += geom[i][j].gcov[l][m] * Vcon[l] * Vcon[m];
+#ifdef DEBUG_WJET
+  int bad_metric = 0;
+  MUNULOOP
+  {
+    if (IS_BAD(geom[i][j].gcov[mu][nu]) || IS_BAD(geom[i][j].gcon[mu][nu]))
+    {
+      bad_metric = 1;
+    }
+  }
+  if (bad_metric || IS_BAD(VdotV) || IS_BAD(geom[i][j].gcon[0][0]) ||
+      !(geom[i][j].gcon[0][0] < 0.0))
+  {
+    debug_wjet_abort_metric("get_fluid_zone", Xzone_dbg, geom[i][j].gcov, geom[i][j].gcon);
+  }
+#endif
   Vfac = sqrt(-1. / geom[i][j].gcon[0][0] * (1. + fabs(VdotV)));
   Ucon[0] = -Vfac * geom[i][j].gcon[0][0];
   for (int l = 1; l < NDIM; l++)
@@ -672,10 +761,8 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
             Bcon[2] * Bcov[2] + Bcon[3] * Bcov[3]) *
        B_unit;
 
-  double rho = p[KRHO][i][j][k];
-  double uu = p[UU][i][j][k];
   *Ne = rho * Ne_unit;
-  *Thetae = thetae_func(uu, rho, (*B) / B_unit, p[KEL][i][j][k]);
+  *Thetae = thetae_func(uu, rho, (*B) / B_unit, kel);
 
   double sig_unscaled = pow((*B) / B_unit, 2) / ((*Ne) / Ne_unit);
   if (with_electrons < 3 && sig_unscaled > 1.)
@@ -688,6 +775,43 @@ void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
 
   double thetae_upper = fmin(Thetae_max, THETAE_HARD_MAX);
   *Thetae = clamp_thetae_limits(*Thetae, THETAE_MIN, thetae_upper);
+
+#ifdef DEBUG_WJET
+  double safe_rho = clamp_positive(rho, 1.e-30);
+  double safe_uu = clamp_positive(uu, 1.e-30);
+  double B_code = (*B) / B_unit;
+  double safe_B = fabs(isfinite(B_code) ? B_code : 0.0);
+  double sigma = 0.0;
+  if (safe_rho > 0.0)
+  {
+    sigma = clamp_sigma(safe_B * safe_B / safe_rho);
+  }
+  double beta = INFINITY;
+  double denom_beta = 0.5 * safe_B * safe_B;
+  if (denom_beta > 0.0)
+  {
+    beta = safe_uu * (gam - 1.0) / denom_beta;
+  }
+  if (isfinite(beta))
+  {
+    beta = clamp_beta_value(beta);
+  }
+  double udotu = 0.0;
+  MULOOP udotu += Ucon[mu] * Ucov[mu];
+  int in_jet = in_jet_region(safe_rho, safe_uu, safe_B);
+  if (IS_BAD(*B) || IS_BAD(*Thetae) || !(*Thetae > 0.0) ||
+      IS_BAD(*Ne) || !(*Ne >= 0.0) ||
+      IS_BAD(sigma) || IS_BAD(beta) ||
+      IS_BAD(udotu) || fabs(udotu + 1.0) > 1e-2)
+  {
+    debug_wjet_abort_state("get_fluid_zone", Xzone_dbg, rho, uu, *Ne, *Thetae,
+                           *B, sigma, beta, in_jet, Ucon, Ucov);
+  }
+  wjet_debug_update(Xzone_dbg, rho, uu, *Ne, *Thetae, *B, sigma, beta, in_jet,
+                    with_electrons, sigma_transition, constant_beta_e0,
+                    constant_beta_e0_exponent, jet_sigma_cut, jet_beta_cut,
+                    jet_thetae, jet_ne_mult);
+#endif
 }
 
 void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
@@ -700,9 +824,36 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
   double gcon[NDIM][NDIM];
   double interp_scalar(const double X[NDIM], double ***var);
 
+#ifdef DEBUG_WJET
+  if (IS_BAD(X[0]) || IS_BAD(X[1]) || IS_BAD(X[2]) || IS_BAD(X[3]))
+  {
+    fprintf(stderr, "DEBUG_WJET get_fluid_params: invalid X\n");
+    fprintf(stderr, "X: %g %g %g %g\n", X[0], X[1], X[2], X[3]);
+    exit(EXIT_FAILURE);
+  }
+#endif
+
   if (X_in_domain(X) == 0)
   {
-    *Ne = 0.;
+#ifdef DEBUG_WJET
+    static int warned = 0;
+    if (!warned)
+    {
+      fprintf(stderr, "DEBUG_WJET get_fluid_params: X outside domain (returning zeros)\n");
+      fprintf(stderr, "X: %g %g %g %g\n", X[0], X[1], X[2], X[3]);
+      warned = 1;
+    }
+#endif
+    *Ne = 0.0;
+    *Thetae = 0.0;
+    *B = 0.0;
+    for (int mu = 0; mu < NDIM; mu++)
+    {
+      Ucon[mu] = 0.0;
+      Ucov[mu] = 0.0;
+      Bcon[mu] = 0.0;
+      Bcov[mu] = 0.0;
+    }
     return;
   }
 
@@ -710,22 +861,55 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
   kel = interp_scalar(X, p[KEL]);
   uu = interp_scalar(X, p[UU]);
 
+  Bp[0] = 0.0;
   Bp[1] = interp_scalar(X, p[B1]);
   Bp[2] = interp_scalar(X, p[B2]);
   Bp[3] = interp_scalar(X, p[B3]);
 
+  Vcon[0] = 0.0;
   Vcon[1] = interp_scalar(X, p[U1]);
   Vcon[2] = interp_scalar(X, p[U2]);
   Vcon[3] = interp_scalar(X, p[U3]);
 
+#ifdef DEBUG_WJET
+  if (IS_BAD(rho) || IS_BAD(uu) || IS_BAD(kel) ||
+      IS_BAD(Bp[1]) || IS_BAD(Bp[2]) || IS_BAD(Bp[3]) ||
+      IS_BAD(Vcon[1]) || IS_BAD(Vcon[2]) || IS_BAD(Vcon[3]) ||
+      !(rho > 0.0) || uu < 0.0)
+  {
+    debug_wjet_abort_prims("get_fluid_params", X, rho, uu, kel, Bp, Vcon);
+  }
+#endif
+
   gcov_func(X, gcov);
   gcon_func(gcov, gcon);
+
+#ifdef DEBUG_WJET
+  int bad_metric = 0;
+  MUNULOOP
+  {
+    if (IS_BAD(gcov[mu][nu]) || IS_BAD(gcon[mu][nu]))
+    {
+      bad_metric = 1;
+    }
+  }
+  if (bad_metric || IS_BAD(gcon[0][0]) || !(gcon[0][0] < 0.0))
+  {
+    debug_wjet_abort_metric("get_fluid_params", X, gcov, gcon);
+  }
+#endif
 
   // Get Ucov
   VdotV = 0.;
   for (int i = 1; i < NDIM; i++)
     for (int j = 1; j < NDIM; j++)
       VdotV += gcov[i][j] * Vcon[i] * Vcon[j];
+#ifdef DEBUG_WJET
+  if (IS_BAD(VdotV))
+  {
+    debug_wjet_abort_metric("get_fluid_params", X, gcov, gcon);
+  }
+#endif
   Vfac = sqrt(-1. / gcon[0][0] * (1. + fabs(VdotV)));
   Ucon[0] = -Vfac * gcon[0][0];
   for (int i = 1; i < NDIM; i++)
@@ -760,6 +944,43 @@ void get_fluid_params(const double X[NDIM], double gcov[NDIM][NDIM], double *Ne,
   *Ne = Ne_local;
   double thetae_upper = fmin(Thetae_max, THETAE_HARD_MAX);
   *Thetae = clamp_thetae_limits(*Thetae, THETAE_MIN, thetae_upper);
+
+#ifdef DEBUG_WJET
+  double safe_rho = clamp_positive(rho, 1.e-30);
+  double safe_uu = clamp_positive(uu, 1.e-30);
+  double B_code = (*B) / B_unit;
+  double safe_B = fabs(isfinite(B_code) ? B_code : 0.0);
+  double sigma = 0.0;
+  if (safe_rho > 0.0)
+  {
+    sigma = clamp_sigma(safe_B * safe_B / safe_rho);
+  }
+  double beta = INFINITY;
+  double denom_beta = 0.5 * safe_B * safe_B;
+  if (denom_beta > 0.0)
+  {
+    beta = safe_uu * (gam - 1.0) / denom_beta;
+  }
+  if (isfinite(beta))
+  {
+    beta = clamp_beta_value(beta);
+  }
+  double udotu = 0.0;
+  MULOOP udotu += Ucon[mu] * Ucov[mu];
+  int in_jet = in_jet_region(safe_rho, safe_uu, safe_B);
+  if (IS_BAD(*B) || IS_BAD(*Thetae) || !(*Thetae > 0.0) ||
+      IS_BAD(*Ne) || !(*Ne >= 0.0) ||
+      IS_BAD(sigma) || IS_BAD(beta) ||
+      IS_BAD(udotu) || fabs(udotu + 1.0) > 1e-2)
+  {
+    debug_wjet_abort_state("get_fluid_params", X, rho, uu, *Ne, *Thetae,
+                           *B, sigma, beta, in_jet, Ucon, Ucov);
+  }
+  wjet_debug_update(X, rho, uu, *Ne, *Thetae, *B, sigma, beta, in_jet,
+                    with_electrons, sigma_transition, constant_beta_e0,
+                    constant_beta_e0_exponent, jet_sigma_cut, jet_beta_cut,
+                    jet_thetae, jet_ne_mult);
+#endif
 }
 
 ////////////////////////////////// COORDINATES /////////////////////////////////
