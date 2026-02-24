@@ -28,7 +28,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 
 # input table of models (row-based)
-DEFAULT_CSV = REPO_ROOT / "data" / "paper_output.csv"
+DEFAULT_CSV = REPO_ROOT / "data" / "paper_output_dedupe.csv"
 
 # GRMHD dump and output locations
 DUMP_DIR = REPO_ROOT / "grmhd_dump_samples"
