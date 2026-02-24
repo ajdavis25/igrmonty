@@ -9,6 +9,7 @@ void load_par_from_argv(int argc, char *argv[], Params *params)
 
   // set default values here
   params->seed = -1; // will use time() to randomize seed if set to -1
+  params->run_tests = 0;
 
   params->biasTuning = 1.;
   params->fitBias = 0;
@@ -29,6 +30,7 @@ void load_par_from_argv(int argc, char *argv[], Params *params)
   params->jet_beta_cut = -1.0;
   params->jet_thetae = 0.0;
   params->jet_ne_mult = 1.0;
+  params->positron_ratio = 0.0;
 
   // Load parameters
   for (int i = 0; i < argc - 1; ++i)
@@ -36,6 +38,28 @@ void load_par_from_argv(int argc, char *argv[], Params *params)
     if (strcmp(argv[i], "-par") == 0)
     {
       load_par(argv[i + 1], params);
+    }
+  }
+
+  // Optional command-line test switch to run internal regression tests.
+  for (int i = 0; i < argc; ++i)
+  {
+    if (strcmp(argv[i], "--run-tests") == 0 ||
+        strcmp(argv[i], "--run_tests") == 0 ||
+        strcmp(argv[i], "--tests") == 0)
+    {
+      params->run_tests = 1;
+      continue;
+    }
+    if (strncmp(argv[i], "--run-tests=", 12) == 0)
+    {
+      params->run_tests = atoi(argv[i] + 12) != 0;
+      continue;
+    }
+    if (strncmp(argv[i], "--run_tests=", 12) == 0)
+    {
+      params->run_tests = atoi(argv[i] + 12) != 0;
+      continue;
     }
   }
 }
@@ -61,7 +85,8 @@ void load_par(const char *fname, Params *params)
     if (line[0] == '#')
       continue;
 
-    read_param(line, "seed", &(params->seed), TYPE_DBL);
+    read_param(line, "seed", &(params->seed), TYPE_INT);
+    read_param(line, "run_tests", &(params->run_tests), TYPE_INT);
 
     read_param(line, "Ns", &(params->Ns), TYPE_DBL);
     read_param(line, "MBH", &(params->MBH), TYPE_DBL);
@@ -95,6 +120,9 @@ void load_par(const char *fname, Params *params)
     read_param(line, "jet_beta_cut", &(params->jet_beta_cut), TYPE_DBL);
     read_param(line, "jet_thetae", &(params->jet_thetae), TYPE_DBL);
     read_param(line, "jet_ne_mult", &(params->jet_ne_mult), TYPE_DBL);
+    read_param(line, "positron_ratio", &(params->positron_ratio), TYPE_DBL);
+    // IPOLE-style alias for compatibility with existing parameter generators.
+    read_param(line, "positronRatio", &(params->positron_ratio), TYPE_DBL);
 
     // set model parameters
     try_set_radiation_parameter(line);

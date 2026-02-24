@@ -3,6 +3,58 @@
 #include "compton.h"
 #include "model_radiation.h"
 
+void test_pair_scalings(void)
+{
+  double old_ratio = positron_ratio;
+  const double nu = 2.3e11;
+  const double Thetae = 10.0;
+  const double Ne = 1.e7;
+  const double B = 50.0;
+  const double theta = M_PI / 3.0;
+
+  fprintf(stderr, "testing pair scaling hooks (positron_ratio)\n");
+  init_emiss_tables();
+
+#if COMPTON
+  init_hotcross();
+  positron_ratio = 0.0;
+  double a0 = alpha_inv_scatt(nu, Thetae, Ne);
+  positron_ratio = 1.0;
+  double a1 = alpha_inv_scatt(nu, Thetae, Ne);
+  if (!(a0 > 0.0 && a1 > 0.0)) {
+    fprintf(stderr, "pair scaling test failed: non-positive alpha_scatt (%g, %g)\n", a0, a1);
+    exit(1);
+  }
+  double ratio_a = a1 / a0;
+  double err = fabs(ratio_a - 3.0) / 3.0;
+  if (err > 1.e-10) {
+    fprintf(stderr, "pair scaling test failed: alpha_scatt ratio=%g expected=3\n", ratio_a);
+    exit(1);
+  }
+#endif
+
+  positron_ratio = 0.0;
+  double j0 = jnu_inv(nu, Thetae, Ne, B, theta);
+  positron_ratio = 1.0;
+  double j1 = jnu_inv(nu, Thetae, Ne, B, theta);
+  if (!(j1 > j0)) {
+    fprintf(stderr, "pair scaling test failed: synch emissivity not increasing (%g -> %g)\n", j0, j1);
+    exit(1);
+  }
+
+  // Brems-dominated check (B=0): with pair-aware EI term this must increase.
+  positron_ratio = 0.0;
+  double jb0 = jnu(1.e10, Ne, Thetae, 0.0, theta);
+  positron_ratio = 1.0;
+  double jb1 = jnu(1.e10, Ne, Thetae, 0.0, theta);
+  if (!(jb1 > jb0)) {
+    fprintf(stderr, "pair scaling test failed: brems emissivity not increasing (%g -> %g)\n", jb0, jb1);
+    exit(1);
+  }
+
+  positron_ratio = old_ratio;
+}
+
 // test dNdgammae function in hotcross.c this is the only 
 // public "interface" for the sampling eDF, so it can act
 // as a sort of regression test
@@ -54,7 +106,7 @@ double Thetae_from_kappa_w(double kappa, double w)
   return w * kappa / (kappa - 3.);
 }
 
-void run_all_tests() {
+void run_all_tests(void) {
 
   // note: in the future, it might make sense to allow 
   // switching of the eDF at runtime
@@ -77,6 +129,8 @@ void run_all_tests() {
   test_compton_sample_beta_dist("test/sample_beta_1.out", 1);
   test_compton_sample_beta_dist("test/sample_beta_5.out", 5);
   test_compton_sample_beta_dist("test/sample_beta_10.out", 10);
+
+  test_pair_scalings();
 
   exit(42);
 }
@@ -172,5 +226,3 @@ void test_hotcross()
 
   fprintf(stderr, "%g %g -> %g\n", w, thetae, value);
 }
-
-

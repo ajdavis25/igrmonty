@@ -1427,6 +1427,9 @@ void report_spectrum(int N_superph_made, Params *params)
   h5io_add_data_str(fid, "/params/model", xstr(MODEL));
 
   h5io_add_group(fid, "/params/electrons");
+  h5io_add_data_dbl(fid, "/params/electrons/positron_ratio", positron_ratio);
+  // Alias for compatibility with existing post-processing scripts expecting IPOLE key casing.
+  h5io_add_data_dbl(fid, "/params/electrons/positronRatio", positron_ratio);
   if (with_electrons == 0)
   {
     h5io_add_data_dbl(fid, "/params/electrons/tp_over_te", tp_over_te);

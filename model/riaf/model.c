@@ -643,6 +643,7 @@ void report_spectrum(int N_superph_made, Params *params)
   h5io_add_data_dbl(fid, "/params/Rin", Rin);
   h5io_add_data_dbl(fid, "/params/Rout", Rmax);
   h5io_add_data_dbl(fid, "/params/bias", biasTuning);
+  h5io_add_data_dbl(fid, "/params/positron_ratio", positron_ratio);
 
   h5io_add_data_dbl(fid, "/params/MBH_solar", MBH_solar);
   h5io_add_data_dbl(fid, "/params/a", a);
@@ -767,4 +768,3 @@ void report_spectrum(int N_superph_made, Params *params)
   H5Fclose(fid);
 
 }
-

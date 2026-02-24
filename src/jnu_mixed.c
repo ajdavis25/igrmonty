@@ -44,6 +44,27 @@ static inline int thetae_in_valid_range(double *Thetae)
   return 1;
 }
 
+static inline double positron_ratio_nonnegative(void)
+{
+  return (positron_ratio > 0.0) ? positron_ratio : 0.0;
+}
+
+// `Ne` passed to emissivity routines is baseline ion-associated density n_i.
+static inline double lepton_density_total(double Ne)
+{
+  return Ne * (1.0 + 2.0 * positron_ratio_nonnegative());
+}
+
+static inline double electron_density_minus(double Ne)
+{
+  return Ne * (1.0 + positron_ratio_nonnegative());
+}
+
+static inline double positron_density_plus(double Ne)
+{
+  return Ne * positron_ratio_nonnegative();
+}
+
 double jnu(double nu, double Ne, double Thetae, double B, double theta)
 {
   double j = 0.;
@@ -168,6 +189,10 @@ static double jnu_bremss(double nu, double Ne, double Thetae)
 
 #if 1 // following Straub+ 2012
   double Fei = 0., Fee = 0., fei = 0., fee = 0.;
+  double ni = fmax(Ne, 0.0);
+  double nlep = fmax(lepton_density_total(Ne), 0.0);
+  double ne_minus = fmax(electron_density_minus(Ne), 0.0);
+  double ne_plus = fmax(positron_density_plus(Ne), 0.0);
 
   double SOMMERFELD_ALPHA = 1. / 137.036;
   double eta = 0.5616;
@@ -195,19 +220,24 @@ static double jnu_bremss(double nu, double Ne, double Thetae)
     Fei = 9. * Thetae / (2. * M_PI) * (log(1.123 * Thetae + 0.48) + 1.5);
     Fee = 24. * Thetae * (log(2. * eta * Thetae) + 1.28);
   }
-  fei = Ne * Ne * SIGMA_THOMSON * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fei;
-  fee = Ne * Ne * re * re * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fee;
+  // Pair-aware brems model:
+  //  - e-i term scales as n_i * n_lep_total (required minimum behavior).
+  //  - e-e term uses same-sign lepton pairs only: n_-^2 + n_+^2.
+  fei = ni * nlep * SIGMA_THOMSON * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fei;
+  fee = (ne_minus * ne_minus + ne_plus * ne_plus) * re * re * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fee;
 
   return (fei + fee) / (4. * M_PI) * HPL / KBOL / Te * efac * gff;
 
 #else
   // Method from Rybicki & Lightman, ultimately from Novikov & Thorne
+  double ni = fmax(Ne, 0.0);
+  double nlep = fmax(lepton_density_total(Ne), 0.0);
 
   double rel = (1. + 4.4e-10 * Te);
 
   double jv = 1. / (4. * M_PI) * pow(2, 5) * M_PI * pow(EE, 6) / (3. * ME * pow(CL, 3));
   jv *= pow(2. * M_PI / (3. * KBOL * ME), 1. / 2.);
-  jv *= pow(Te, -1. / 2.) * Ne * Ne;
+  jv *= pow(Te, -1. / 2.) * ni * nlep;
   jv *= efac * rel * gff;
 
   return jv;
@@ -219,6 +249,7 @@ static double jnu_thermal(double nu, double Ne, double Thetae, double B,
                           double theta)
 {
   double K2, nuc, nus, x, f, j, sth, xp1, xx;
+  double Ne_lep = lepton_density_total(Ne);
   double K2_eval(double Thetae);
 
   if (!(Thetae > THETAE_MIN))
@@ -241,7 +272,7 @@ static double jnu_thermal(double nu, double Ne, double Thetae, double B,
   xp1 = pow(x, 1. / 3.);
   xx = sqrt(x) + CST * sqrt(xp1);
   f = xx * xx;
-  j = (M_SQRT2 * M_PI * EE * EE * Ne * nus / (3. * CL * K2)) * f *
+  j = (M_SQRT2 * M_PI * EE * EE * Ne_lep * nus / (3. * CL * K2)) * f *
       exp(-xp1);
 
   return j;
@@ -249,6 +280,7 @@ static double jnu_thermal(double nu, double Ne, double Thetae, double B,
 
 static double jnu_powerlaw(double nu, double Ne, double Thetae, double B, double theta)
 {
+  double Ne_lep = lepton_density_total(Ne);
   if (!(Thetae > THETAE_MIN))
   {
     return 0.;
@@ -264,7 +296,7 @@ static double jnu_powerlaw(double nu, double Ne, double Thetae, double B, double
 
   double sth = sin(theta);
   double nuc = EE * B / (2. * M_PI * ME * CL);
-  double factor = (Ne * pow(EE, 2.) * nuc) / CL;
+  double factor = (Ne_lep * pow(EE, 2.) * nuc) / CL;
 
   if (nu > 1.e8 * nuc)
   {
@@ -282,6 +314,7 @@ static double jnu_powerlaw(double nu, double Ne, double Thetae, double B, double
 #include <gsl/gsl_sf_gamma.h>
 static double jnu_kappa(double nu, double Ne, double Thetae, double B, double theta)
 {
+  double Ne_lep = lepton_density_total(Ne);
   if (!(Thetae > THETAE_MIN))
   {
     return 0.;
@@ -293,7 +326,7 @@ static double jnu_kappa(double nu, double Ne, double Thetae, double B, double th
 
   double kap = model_kappa;
   double nuc = EE * B / (2. * M_PI * ME * CL);
-  double js = Ne * pow(EE, 2) * nuc / CL;
+  double js = Ne_lep * pow(EE, 2) * nuc / CL;
   double x = 3. * pow(kap, -3. / 2.);
   double Jslo, Jshi;
 
@@ -332,6 +365,7 @@ static double int_jnu_thermal(double Ne, double Thetae, double Bmag, double nu)
   // Returns energy per unit time at frequency nu, all in cgs
 
   double j_fac, K2;
+  double Ne_lep = lepton_density_total(Ne);
   double F_eval(double Thetae, double B, double nu);
   double K2_eval(double Thetae);
 
@@ -346,7 +380,7 @@ static double int_jnu_thermal(double Ne, double Thetae, double Bmag, double nu)
     return 0.;
   }
 
-  j_fac = Ne * Bmag * Thetae * Thetae / K2;
+  j_fac = Ne_lep * Bmag * Thetae * Thetae / K2;
 
   return JCST * j_fac * F_eval(Thetae, Bmag, nu);
 }
@@ -393,6 +427,7 @@ static double jnu_powerlaw_integrand(double th, void *params)
 static double int_jnu_powerlaw(double Ne, double Thetae, double B, double nu)
 {
   double G_eval_powerlaw(double Thetae, double B, double nu);
+  double Ne_lep = lepton_density_total(Ne);
 
   if (!(Thetae > THETAE_MIN))
   {
@@ -400,7 +435,7 @@ static double int_jnu_powerlaw(double Ne, double Thetae, double B, double nu)
   }
 
   double CONST = EE * EE * EE / (2. * M_PI * ME * CL * CL);
-  return CONST * Ne * B * G_eval_powerlaw(Thetae, B, nu);
+  return CONST * Ne_lep * B * G_eval_powerlaw(Thetae, B, nu);
 }
 
 static double int_jnu_kappa(double Ne, double Thetae, double B, double nu)
@@ -409,6 +444,7 @@ static double int_jnu_kappa(double Ne, double Thetae, double B, double nu)
   // frequency nu in cgs
 
   double G_eval(double Thetae, double B, double nu);
+  double Ne_lep = lepton_density_total(Ne);
 
   if (!(Thetae > THETAE_MIN))
   {
@@ -416,7 +452,7 @@ static double int_jnu_kappa(double Ne, double Thetae, double B, double nu)
   }
 
   double nuc = EE * B / (2. * M_PI * ME * CL);
-  double js = Ne * EE * EE * nuc / CL;
+  double js = Ne_lep * EE * EE * nuc / CL;
   double cut = exp(-nu / NUCUT);
 
   return js * G_eval(Thetae, B, nu) * cut;

@@ -165,7 +165,14 @@ double alpha_inv_scatt(double nu, double Thetae, double Ne)
 {
   #if COMPTON
 
-	return nu * kappa_es(nu, Thetae) * Ne * MP;
+  // Convention:
+  //   Ne is ion-associated baseline density from the fluid model (n_i).
+  //   With positrons, total scattering leptons are n_lep = (1 + 2 f_pos) n_i.
+  // Unit check:
+  //   kappa_es -> cm^2 g^-1, (n_lep * MP) -> g cm^-3, so
+  //   kappa_es * (n_lep * MP) -> cm^-1 and nu * (...) is invariant opacity.
+  double n_lep = Ne * (1.0 + 2.0 * positron_ratio);
+	return nu * kappa_es(nu, Thetae) * n_lep * MP;
 
   #else
 
@@ -178,6 +185,9 @@ double alpha_inv_scatt(double nu, double Thetae, double Ne)
 double alpha_inv_abs(double nu, double Thetae, double Ne, double B,
 		     double theta)
 {
+  // `Ne` is baseline ion-associated density n_i. Synchrotron-related
+  // absorptivities should scale with total radiating leptons.
+  double Ne_lep = Ne * (1.0 + 2.0 * positron_ratio);
 
 #if BRESMSSTRAHLUNG && (MODEL_EDF==EDF_KAPPA_FIXED)
   fprintf(stderr, "ERROR absorptivities not set up for bremss and kappa!\n");
@@ -225,7 +235,7 @@ double alpha_inv_abs(double nu, double Thetae, double Ne, double B,
   double xbr = pow(-7./4. + 8./5.*kap,-43./50.);
 
   As = pow(pow(Aslo,-xbr) + pow(Ashi,-xbr),-1./xbr);
-  double alphas = Ne*EE*EE/(nu*ME*CL)*As;
+  double alphas = Ne_lep*EE*EE/(nu*ME*CL)*As;
   double cut = exp(-nu/NUCUT);
   
   return nu*alphas*cut;
@@ -252,7 +262,7 @@ double alpha_inv_abs(double nu, double Thetae, double Ne, double B,
   double sth = sin(theta);
   double nu_c = EE * B / (2 * M_PI * ME * CL); 
 
-  double prefactor = Ne * EE*EE / (nu * ME * CL);
+  double prefactor = Ne_lep * EE*EE / (nu * ME * CL);
 
   double t1 = pow(3., (powerlaw_p+1)/2.) * (powerlaw_p - 1.);
   double t2 = 4. * (pow(powerlaw_gamma_min, 1.-powerlaw_p) - 
@@ -282,12 +292,11 @@ double alpha_inv_abs(double nu, double Thetae, double Ne, double B,
 }
 
 
-// return electron scattering opacity in cgs
+// return scattering opacity per mass in cgs (cm^2 / g)
 double kappa_es(double nu, double Thetae)
 {
 
-	// assume pure hydrogen gas to
-	// convert cross section to opacity
+	// convert cross section (cm^2) to opacity per mass (cm^2/g)
 	
 	double Eg = HPL * nu / (ME * CL * CL);
 

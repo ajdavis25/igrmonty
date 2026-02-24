@@ -71,6 +71,7 @@ double dMsim;
 double M_unit, L_unit, T_unit;
 double RHO_unit, U_unit, B_unit, Ne_unit, Thetae_unit;
 double max_tau_scatt, Ladv, dMact, bias_norm;
+double positron_ratio = 0.0;
 
 // Define default, should be set by problem
 double biasTuning = 1.;
@@ -81,9 +82,6 @@ int main(int argc, char *argv[])
   fprintf(stderr, "grmonty. githash: %s\n", xstr(VERSION));
   fprintf(stderr, "notes: %s\n\n", xstr(NOTES));
 
-  // optionally run tests. TODO use command line switch
-  //run_all_tests();
-
   double wtime = omp_get_wtime();
 
   // spectral bin parameters
@@ -92,6 +90,29 @@ int main(int argc, char *argv[])
 
   // load parameters from command line
   load_par_from_argv(argc, argv, &params);
+
+  // optional internal regression tests
+  if (params.run_tests)
+  {
+    run_all_tests();
+  }
+
+  if (!isfinite(params.positron_ratio) || params.positron_ratio < 0.0)
+  {
+    fprintf(stderr, "invalid positron_ratio=%g (must be finite and >= 0)\n",
+            params.positron_ratio);
+    exit(EXIT_FAILURE);
+  }
+  positron_ratio = params.positron_ratio;
+  fprintf(stderr,
+          "composition: positron_ratio=%g, n_i=Ne(fluid), n_lep=(1+2*positron_ratio)*n_i\n",
+          positron_ratio);
+  if (positron_ratio > 0.0)
+  {
+    fprintf(stderr,
+            "convention: do not pre-scale M_unit/density for pairs in downstream scripts; "
+            "GRMONTY applies pair lepton scaling internally.\n");
+  }
 
   // initialize model
   init_model(argc, argv, &params);

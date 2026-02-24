@@ -53,8 +53,9 @@ endif
 # Allow overrides of which cflags to add
 CFLAGS += $(CFLAGS_CUSTOM)
 
-# LTO can break TLS with OpenMP threadprivate symbols (seen with DEBUG_WJET).
-ifneq (,$(findstring -DDEBUG_WJET,$(CFLAGS_CUSTOM)))
+# LTO can break TLS with OpenMP threadprivate symbols (seen with DEBUG_WJET
+# and with internal test hooks enabled). Prefer stable non-LTO builds.
+ifneq (,$(findstring -fopenmp,$(CFLAGS)))
 	CFLAGS := $(filter-out -flto,$(CFLAGS))
 	CFLAGS += -fno-lto
 endif

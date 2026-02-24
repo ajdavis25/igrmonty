@@ -16,6 +16,7 @@
 typedef struct params_t
 {
   int seed;
+  int run_tests;
 
   double Ns;
   double MBH;
@@ -47,6 +48,7 @@ typedef struct params_t
   double jet_beta_cut;
   double jet_thetae;
   double jet_ne_mult;
+  double positron_ratio;
 
   char loaded;
 } Params;

@@ -148,6 +148,7 @@ extern double B_unit;
 extern double Ne_unit;
 extern double Thetae_unit;
 extern double TP_OVER_TE;
+extern double positron_ratio;
 
 extern double max_tau_scatt, Ladv, dMact, bias_norm, biasTuning;
 
@@ -174,7 +175,7 @@ void print_vector(const char *name, const double v[NDIM]);
 void dump_at_X(double X[NDIM]);
 
 /* testing */
-void run_all_tests();
+void run_all_tests(void) __attribute__((noipa));
 
 /* core monte carlo/radiative transport routines */
 void track_super_photon(struct of_photon *ph);

@@ -9,6 +9,10 @@ this script:
   * repeats until the flux is within tolerance or max iterations hit,
   * logs every trial to a CSV history file,
   * optionally resumes from existing spectra/logs/parfiles.
+
+pair convention:
+  if GRMONTY `positron_ratio` is used, keep `M_unit` baryonic and do not
+  externally pre-scale density/M_unit by `(1 + 2*positron_ratio)`.
 """
 
 import argparse
@@ -940,6 +944,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     context = build_context(row)
 
     pos = str(context["pos"]).strip()
+    try:
+        if float(pos) != 0.0:
+            print(
+                "[note] using nonzero pos: GRMONTY applies pair scaling internally; "
+                "do not pre-scale M_unit by (1+2*pos).",
+                flush=True,
+            )
+    except ValueError:
+        pass
     munit_key = f"MunitUsed_pos{pos}"
 
     munit_used = row.get(munit_key, "")
