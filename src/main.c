@@ -57,6 +57,9 @@ long long N_init_reject_state;
 long long N_init_reject_x;
 long long N_init_reject_metric;
 long long N_init_reject_nu;
+int run_status_code = RUN_STATUS_UNKNOWN;
+char run_status[RUN_STATUS_MAXLEN] = "unknown";
+char run_status_detail[RUN_STATUS_DETAIL_MAXLEN] = "";
 struct of_spectrum spect[N_TYPEBINS][N_THBINS][N_EBINS] = { };
 
 double t;
@@ -81,6 +84,8 @@ int main(int argc, char *argv[])
   // motd
   fprintf(stderr, "grmonty. githash: %s\n", xstr(VERSION));
   fprintf(stderr, "notes: %s\n\n", xstr(NOTES));
+  SET_RUN_STATUS(RUN_STATUS_RUNNING, "running", "startup");
+  fprintf(stderr, "bias guard threshold: effectiveness ratio <= %g\n", BIAS_ABORT_RATIO);
 
   double wtime = omp_get_wtime();
 
@@ -99,8 +104,11 @@ int main(int argc, char *argv[])
 
   if (!isfinite(params.positron_ratio) || params.positron_ratio < 0.0)
   {
+    SET_RUN_STATUS(RUN_STATUS_INIT_ERROR, "init_error", "invalid_positron_ratio");
     fprintf(stderr, "invalid positron_ratio=%g (must be finite and >= 0)\n",
             params.positron_ratio);
+    fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
+            run_status_code, run_status, run_status_detail);
     exit(EXIT_FAILURE);
   }
   positron_ratio = params.positron_ratio;
@@ -170,7 +178,7 @@ int main(int argc, char *argv[])
           if ((int)N_superph_made % 1000 == 0 && N_superph_made > 0) {
             if ((int)N_superph_made % 10000 == 0)
               fprintf(stderr, ".");
-            if (N_scatt / N_superph_made > 10.) {
+            if (N_superph_made > 0.0 && N_scatt / N_superph_made > BIAS_ABORT_RATIO) {
               /* if effectiveness ratio (see below after the omp
                  block) becomes too big, jump to bias tuning */
               #pragma omp critical
@@ -182,17 +190,23 @@ int main(int argc, char *argv[])
         }
       }
       // get effectiveness
-      double ratio = N_scatt / N_superph_made;
+      double ratio = (N_superph_made > 0.0) ? (N_scatt / N_superph_made) : 0.0;
       fprintf(stderr, "ratio = %g\n", ratio);
 
       if (ratio == 0) {
         breakout_counter += 1;
         if (breakout_counter > 10) {
+          SET_RUN_STATUS(RUN_STATUS_INIT_ERROR, "init_error", "fitbias_zero_ratio_stalled");
           fprintf(stderr, "couldn't do anything, despite my best efforts. farewell!\n");
+          fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
+                  run_status_code, run_status, run_status_detail);
           exit(41);
         }
         fprintf(stderr, "something very wrong. attempting to increase ratio manually.\n");
         biasTuning *= 5.;
+        SET_RUN_STATUS(RUN_STATUS_INIT_ERROR, "init_error", "fitbias_zero_ratio_single");
+        fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
+                run_status_code, run_status, run_status_detail);
         exit(40);
       }
 
@@ -237,6 +251,7 @@ int main(int argc, char *argv[])
 
   fprintf(stderr, "\nEntering main loop...\n");
   fprintf(stderr, "(aiming for Ns=%d)\n", Ns);
+  SET_RUN_STATUS(RUN_STATUS_RUNNING, "running", "main_loop");
   summary(NULL, NULL); /* initialize main loop timer */
   
   reset_state(1);
@@ -264,27 +279,65 @@ int main(int argc, char *argv[])
         summary(stderr, NULL);
 
       // avoid too much scattering; break for all threads immediately
-      if (N_scatt > 10000 && N_scatt / N_superph_made > 10.)
-	bad_bias = 1;
+      if (N_scatt > 10000 && N_superph_made > 0.0)
+      {
+        double ratio = N_scatt / N_superph_made;
+        if (ratio > BIAS_ABORT_RATIO)
+        {
+          #pragma omp critical
+          {
+            if (!bad_bias)
+            {
+              char detail[RUN_STATUS_DETAIL_MAXLEN];
+              bad_bias = 1;
+              snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+                       "ratio=%g limit=%g biasTuning=%g",
+                       ratio, BIAS_ABORT_RATIO, biasTuning);
+              SET_RUN_STATUS(RUN_STATUS_ABORT_BIAS, "abort_bias", detail);
+              fprintf(stderr,
+                      "\nbias guard triggered: ratio=%g limit=%g biasTuning=%g\n",
+                      ratio, BIAS_ABORT_RATIO, biasTuning);
+            }
+          }
+        }
+      }
       if (bad_bias)
         break;
     }
   }
 
   summary(stderr, "compute ");
+  double final_ratio = (N_superph_made > 0.0) ? (N_scatt / N_superph_made) : 0.0;
 
   if (invalid_bias)
     fprintf(stderr, "\n%d invalid bias (bias < 1) skipped\n", invalid_bias);
   
   if (! bad_bias) {
+    char detail[RUN_STATUS_DETAIL_MAXLEN];
+    snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+             "ratio=%g limit=%g biasTuning=%g",
+             final_ratio, BIAS_ABORT_RATIO, biasTuning);
+    SET_RUN_STATUS(RUN_STATUS_OK, "ok", detail);
     omp_reduce_spect();
     report_spectrum((int) N_superph_made, &params);
   } else {
-    fprintf(stderr, "\nit seems the bias was too high -- aborting.\n");
+    if (run_status_code != RUN_STATUS_ABORT_BIAS)
+    {
+      char detail[RUN_STATUS_DETAIL_MAXLEN];
+      snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+               "ratio=%g limit=%g biasTuning=%g",
+               final_ratio, BIAS_ABORT_RATIO, biasTuning);
+      SET_RUN_STATUS(RUN_STATUS_ABORT_BIAS, "abort_bias", detail);
+    }
+    fprintf(stderr,
+            "\nit seems the bias was too high -- aborting (ratio=%g limit=%g biasTuning=%g).\n",
+            final_ratio, BIAS_ABORT_RATIO, biasTuning);
   }
 
   wtime = omp_get_wtime() - wtime;
   fprintf(stderr, "Total wallclock time: %g s\n\n", wtime);
+  fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
+          run_status_code, run_status, run_status_detail);
 
   return bad_bias;
 }

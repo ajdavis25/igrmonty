@@ -16,4 +16,5 @@ beta_crit_coefficient 0.5
 with_electrons 4
 trat_small 1
 trat_large 20
+positron_ratio 0
 Thetae_max 1e100

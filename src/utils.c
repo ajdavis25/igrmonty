@@ -315,9 +315,23 @@ void init_zone(int i, int j, int k, double *nz, double *dnmax)
   ninterp = *nz / geom[i][j].gzone / dx[1]/dx[2]/dx[3] / L_unit/L_unit/L_unit;
 
   if (*nz > Ns * log(NUMAX / NUMIN)) {
+    int thetae_nonfinite = !isfinite(Thetae);
+    int thetae_floor_hit = isfinite(Thetae) && Thetae <= THETAE_MIN * 1.000001;
+    int ninterp_nonfinite = !isfinite(ninterp);
+    int ninterp_nonpositive = !(ninterp > 0.0);
+    char detail[RUN_STATUS_DETAIL_MAXLEN];
+    snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+             "init_zone_overflow i=%d j=%d k=%d nz=%g lim=%g ninterp=%g",
+             i, j, k, *nz, Ns * log(NUMAX / NUMIN), ninterp);
+    SET_RUN_STATUS(RUN_STATUS_ZONE_ERROR, "zone_error", detail);
     fprintf(stderr,
-      "Something very wrong in zone %d %d: \ng = %g B=%g  Thetae=%g  ninterp=%g nz = %e\n\n",
-      i, j, geom[i][j].gzone, Bmag, Thetae, ninterp, *nz);
+      "Something very wrong in zone %d %d %d: \ng = %g B=%g Thetae=%g ninterp=%g nz=%e limit=%e\n",
+      i, j, k, geom[i][j].gzone, Bmag, Thetae, ninterp, *nz, Ns * log(NUMAX / NUMIN));
+    fprintf(stderr,
+      "diagnostics: thetae_nonfinite=%d thetae_floor_hit=%d ninterp_nonfinite=%d ninterp_nonpositive=%d Ne=%g\n\n",
+      thetae_nonfinite, thetae_floor_hit, ninterp_nonfinite, ninterp_nonpositive, Ne);
+    fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
+            run_status_code, run_status, run_status_detail);
     exit(-1);
     *nz = 0.;
     *dnmax = 0.;
@@ -667,13 +681,27 @@ void init_tetrads()
 void summary(FILE *file, const char *prefix)
 {
   static time_t starttime;
+  static double prev_superph_made;
+  static int prev_nscatt;
+  static int have_prev_sample = 0;
   if(!file)
+  {
     starttime = time(NULL); /* initilize */
+    prev_superph_made = N_superph_made;
+    prev_nscatt = N_scatt;
+    have_prev_sample = 1;
+  }
   else {
     double deltatime = time(NULL) - starttime;
+    if (deltatime <= 0.0)
+    {
+      deltatime = 1.0;
+    }
     
     double      nmade,  nscatt;
     const char *umade, *uscatt;
+    double ratio = (N_superph_made > 0.0) ? N_scatt / N_superph_made : 0.0;
+    double dnscatt_dmade = NAN;
 
     if (N_superph_made > 0.999e6) {
       nmade = N_superph_made / 1e6;
@@ -690,6 +718,15 @@ void summary(FILE *file, const char *prefix)
       nscatt = N_scatt / 1e3;
       uscatt = "k";
     }
+    if (have_prev_sample)
+    {
+      double dmade = N_superph_made - prev_superph_made;
+      double dscatt = (double)N_scatt - (double)prev_nscatt;
+      if (dmade > 0.0)
+      {
+        dnscatt_dmade = dscatt / dmade;
+      }
+    }
     
     fprintf(stderr,
             "%stime %gs, "
@@ -697,7 +734,19 @@ void summary(FILE *file, const char *prefix)
             "scatter %.3g%s, ratio %.3g\n",
             prefix ? prefix : "", deltatime,
             nmade,  umade,  N_superph_made / deltatime / 1e3,
-            nscatt, uscatt, N_scatt / N_superph_made);
+            nscatt, uscatt, ratio);
+    if (isfinite(dnscatt_dmade))
+    {
+      fprintf(stderr,
+              "%sbiasTuning=%g abort_ratio_limit=%g dNscatt/dNmade=%g\n",
+              prefix ? prefix : "", biasTuning, BIAS_ABORT_RATIO, dnscatt_dmade);
+    }
+    else
+    {
+      fprintf(stderr,
+              "%sbiasTuning=%g abort_ratio_limit=%g dNscatt/dNmade=n/a\n",
+              prefix ? prefix : "", biasTuning, BIAS_ABORT_RATIO);
+    }
     if (prefix && N_init_reject_total > 0)
     {
       fprintf(stderr,
@@ -705,5 +754,8 @@ void summary(FILE *file, const char *prefix)
               prefix, N_init_reject_total, N_init_reject_state,
               N_init_reject_x, N_init_reject_metric, N_init_reject_nu);
     }
+    prev_superph_made = N_superph_made;
+    prev_nscatt = N_scatt;
+    have_prev_sample = 1;
   }  
 }

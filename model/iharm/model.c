@@ -1410,6 +1410,7 @@ void report_spectrum(int N_superph_made, Params *params)
   h5io_add_data_dbl(fid, "/params/hslope", hslope);
   h5io_add_data_dbl(fid, "/params/t", t);
   h5io_add_data_dbl(fid, "/params/bias", biasTuning);
+  h5io_add_data_dbl(fid, "/params/bias_abort_ratio_limit", BIAS_ABORT_RATIO);
 
   h5io_add_data_int(fid, "/params/SYNCHROTRON", SYNCHROTRON);
   h5io_add_data_int(fid, "/params/BREMSSTRAHLUNG", BREMSSTRAHLUNG);
@@ -1542,6 +1543,11 @@ void report_spectrum(int N_superph_made, Params *params)
   h5io_add_data_int(fid, "/output/Nrecorded", N_superph_recorded);
   h5io_add_data_int(fid, "/output/Nmade", N_superph_made);
   h5io_add_data_int(fid, "/output/Nscattered", N_scatt);
+  h5io_add_data_int(fid, "/output/run_status_code", run_status_code);
+  h5io_add_data_str(fid, "/output/run_status", run_status);
+  h5io_add_data_str(fid, "/output/run_status_detail", run_status_detail);
+  h5io_add_data_dbl(fid, "/output/effectiveness_ratio_final",
+                    N_superph_made > 0 ? (double)N_scatt / (double)N_superph_made : 0.0);
 
   double LEdd = 4. * M_PI * GNEWT * MBH * MP * CL / SIGMA_THOMSON;
   double MdotEdd = 4. * M_PI * GNEWT * MBH * MP / (SIGMA_THOMSON * CL * 0.1);

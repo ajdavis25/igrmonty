@@ -2,7 +2,7 @@
 """automatic M_unit tuning for GRMONTY using gentle power-law updates.
 
 this script:
-  * reads a model row from a CSV (MAD/SANE, model, spin, dump index, pos),
+  * reads a model row from a CSV (MAD/SANE, model, spin, dump index, Rhigh, pos),
   * runs GRMONTY with a given M_unit,
   * measures the flux at a target frequency (default 230 GHz),
   * updates M_unit via  M_new = M_old * (F_target/F_old)^(1/P),
@@ -18,6 +18,7 @@ pair convention:
 import argparse
 import csv
 import math
+import re
 import subprocess
 import sys
 from collections import namedtuple
@@ -63,6 +64,8 @@ MODEL_TO_ELECTRON_MODE: Dict[str, int] = {
 D_MPC = 16.8
 FREQ_TARGET_HZ = 230.0e9
 F_TARGET_JY = 0.5
+DEFAULT_BETA_CRIT = 1.0
+DEFAULT_BETA_CRIT_COEFF = 0.5
 
 PC_TO_CM = 3.085677581e18
 D_CM = D_MPC * 1e6 * PC_TO_CM
@@ -114,6 +117,193 @@ def state_to_prefix(state: str) -> str:
     raise ValueError(f"Unknown state: {state}")
 
 
+def _norm_key(key: str) -> str:
+    return "".join(ch.lower() for ch in key if ch.isalnum())
+
+
+def find_row_value(row: dict, *candidate_keys: str) -> Tuple[Optional[str], Optional[str]]:
+    """case-insensitive/format-insensitive row lookup for CSV columns."""
+    key_map = {_norm_key(str(k)): k for k in row.keys()}
+    for cand in candidate_keys:
+        match_key = key_map.get(_norm_key(cand))
+        if match_key is None:
+            continue
+        raw = row.get(match_key)
+        if raw is None:
+            continue
+        val = str(raw).strip()
+        if val == "":
+            continue
+        return val, str(match_key)
+    return None, None
+
+
+def require_row_value(row: dict, *candidate_keys: str) -> str:
+    val, key = find_row_value(row, *candidate_keys)
+    if val is None:
+        raise KeyError(
+            f"Required CSV column missing: one of {candidate_keys}. "
+            f"Available columns: {list(row.keys())}"
+        )
+    _ = key  # key is useful for debugging but not needed by the caller.
+    return val
+
+
+def parse_nonnegative_float(raw: object, label: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{label} must be finite and >= 0 (got {raw!r})")
+    return value
+
+
+def format_float_tag(value: float) -> str:
+    """compact stable tag used in output filenames/log tags."""
+    nearest = round(value)
+    if abs(value - nearest) < 1e-12:
+        return str(int(nearest))
+    return f"{value:.6g}"
+
+
+def format_pos_tag(positron_ratio: float) -> str:
+    """compact stable tag used in output filenames/log tags (e.g. 0, 0.5, 1)."""
+    return format_float_tag(positron_ratio)
+
+
+def parse_positive_float(raw: object, label: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{label} must be finite and > 0 (got {raw!r})")
+    return value
+
+
+def resolve_critbeta_params(row: dict, *, model: str) -> Tuple[float, float]:
+    """resolve critical-beta parameters from CSV with defaults."""
+    beta_crit = DEFAULT_BETA_CRIT
+    beta_crit_coeff = DEFAULT_BETA_CRIT_COEFF
+
+    if not model.upper().startswith("CRITBETA"):
+        return beta_crit, beta_crit_coeff
+
+    beta_raw, beta_key = find_row_value(
+        row,
+        "beta_crit",
+        "betaCrit",
+        "betacrit",
+    )
+    if beta_raw is not None:
+        beta_crit = parse_positive_float(beta_raw, f"CSV column '{beta_key}'")
+
+    coeff_raw, coeff_key = find_row_value(
+        row,
+        "beta_crit_coefficient",
+        "beta_crit_coeff",
+        "betaCritCoefficient",
+        "f",
+    )
+    if coeff_raw is not None:
+        beta_crit_coeff = parse_positive_float(
+            coeff_raw,
+            f"CSV column '{coeff_key}'",
+        )
+
+    return beta_crit, beta_crit_coeff
+
+
+def resolve_positron_ratio(
+    row: dict, *, override: Optional[float]
+) -> Tuple[float, str]:
+    """resolve positron_ratio from CLI override or CSV columns."""
+    if override is not None:
+        return parse_nonnegative_float(override, "--positron-ratio"), "cli"
+
+    raw, key = find_row_value(
+        row,
+        "positron_ratio",
+        "positronRatio",
+        "positron frac",
+        "positron_frac",
+        "positron fraction",
+        "pair_ratio",
+        "pair ratio",
+        "pair_fraction",
+        "pair frac",
+        "pos",
+    )
+    if raw is None:
+        return 0.0, "default"
+
+    return parse_nonnegative_float(raw, f"CSV column '{key}'"), f"csv:{key}"
+
+
+def candidate_munit_keys(positron_ratio: float, pos_tag: str) -> List[str]:
+    keys = [f"MunitUsed_pos{pos_tag}"]
+    if abs(positron_ratio) < 1e-12:
+        keys.append("MunitUsed_pos0")
+    if abs(positron_ratio - 1.0) < 1e-12:
+        keys.append("MunitUsed_pos1")
+    keys.extend(["MunitUsed", "M_unit"])
+
+    # de-duplicate while preserving order
+    out: List[str] = []
+    for key in keys:
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def discover_positron_ratios_from_munit_columns(row: dict) -> List[Tuple[float, str]]:
+    """infer available positron branches from CSV columns like MunitUsed_pos0/pos1."""
+    found: List[Tuple[float, str]] = []
+    seen: set = set()
+
+    for key, raw in row.items():
+        if raw is None:
+            continue
+        raw_val = str(raw).strip()
+        if raw_val == "":
+            continue
+
+        key_compact = re.sub(r"\s+", "", str(key))
+        match = re.match(
+            r"^munitused_?pos(?P<tag>\d+(?:\.\d+)?)$",
+            key_compact,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            continue
+
+        ratio = parse_nonnegative_float(
+            match.group("tag"),
+            f"CSV column '{key}' positron tag",
+        )
+        ratio_key = f"{ratio:.12g}"
+        if ratio_key in seen:
+            continue
+        seen.add(ratio_key)
+        found.append((ratio, f"csv:{key}"))
+
+    found.sort(key=lambda item: item[0])
+    return found
+
+
+def resolve_positron_runs(
+    row: dict, *, override: Optional[float]
+) -> List[Tuple[float, str]]:
+    """resolve one or more positron branches to execute for this row."""
+    if override is not None:
+        return [(parse_nonnegative_float(override, "--positron-ratio"), "cli")]
+
+    ratio, source = resolve_positron_ratio(row, override=None)
+    if source != "default":
+        return [(ratio, source)]
+
+    inferred = discover_positron_ratios_from_munit_columns(row)
+    if inferred:
+        return inferred
+
+    return [(0.0, "default")]
+
+
 def load_row(csv_path: Path, row_index: int) -> dict:
     """load a single row (0-based) from the CSV as a dict with stripped fields."""
     with csv_path.open("r", newline="") as fh:
@@ -134,38 +324,59 @@ def infer_electron_mode(model: str) -> int:
         raise ValueError(f"Unknown model '{model}' for electron mode mapping") from exc
 
 
-def build_context(row: dict) -> dict:
+def build_context(row: dict, *, positron_ratio_override: Optional[float] = None) -> dict:
     """build a context dict (metadata) for this tuning job from the CSV row."""
-    state = row["state"].upper()
+    state = require_row_value(row, "state", "MAD/SANE").upper()
     if state not in STATE_DEFAULT_MUNIT:
         raise ValueError(f"Unexpected MAD/SANE value '{state}'")
 
-    model = row["model"]
+    model = require_row_value(row, "model")
     electron_mode = infer_electron_mode(model)
 
-    spin = row["spin"]
+    spin = require_row_value(row, "spin")
     spin_tag = format_spin_tag(spin)
-    dump_idx = row["dump_index"]
+    dump_idx = require_row_value(row, "dump_index")
+    rhigh_raw, rhigh_key = find_row_value(row, "Rhigh", "rhigh", "r_high", "trat_large")
+    if rhigh_raw is None:
+        raise KeyError("Required CSV column missing: one of ('Rhigh', 'rhigh', 'r_high', 'trat_large').")
+    rhigh = parse_nonnegative_float(rhigh_raw, f"CSV column '{rhigh_key}'")
+    if rhigh <= 0.0:
+        raise ValueError(f"Rhigh/trat_large must be > 0 (got {rhigh_raw!r})")
+    rhigh_tag = format_float_tag(rhigh)
+    beta_crit, beta_crit_coeff = resolve_critbeta_params(row, model=model)
+    beta_crit_tag = format_float_tag(beta_crit)
+    beta_crit_coeff_tag = format_float_tag(beta_crit_coeff)
     state_prefix = state_to_prefix(state)
 
     dump_file = DUMP_DIR / f"{state_prefix}a{spin_tag}_{dump_idx}.h5"
     if not dump_file.exists():
         raise FileNotFoundError(f"Dump not found: {dump_file}")
 
-    pos = row.get("pos", "0")
+    positron_ratio, positron_source = resolve_positron_ratio(
+        row, override=positron_ratio_override
+    )
+    pos = format_pos_tag(positron_ratio)
+    crit_suffix = ""
+    if model.upper().startswith("CRITBETA"):
+        crit_suffix = f"_bc{beta_crit_tag}_f{beta_crit_coeff_tag}"
 
     spectrum_base = (
         OUT_DIR
-        / f"spectrum_{state_prefix}a{spin_tag}_{dump_idx}_{model}_pos{pos}"
+        / f"spectrum_{state_prefix}a{spin_tag}_{dump_idx}_{model}_rh{rhigh_tag}{crit_suffix}_pos{pos}"
     )
-    log_tag = f"{state}_{model}_a{spin_tag}_t{dump_idx}_pos{pos}"
+    log_tag = f"{state}_{model}_a{spin_tag}_t{dump_idx}_rh{rhigh_tag}{crit_suffix}_pos{pos}"
 
     return {
         "state": state,
         "model": model,
         "spin": spin,
         "dump_index": dump_idx,
+        "rhigh": rhigh,
+        "beta_crit": beta_crit,
+        "beta_crit_coeff": beta_crit_coeff,
         "pos": pos,
+        "positron_ratio": positron_ratio,
+        "positron_source": positron_source,
         "dump_file": dump_file,
         "electron_mode": electron_mode,
         "spectrum_base": spectrum_base,
@@ -313,6 +524,10 @@ def write_par_file(
     spectrum_path: Path,
     electron_mode: int,
     tp_over_te: float,
+    trat_large: float,
+    beta_crit: float,
+    beta_crit_coefficient: float,
+    positron_ratio: float,
     bias_ns: int,
     bias_start: float,
     target_ratio: float,
@@ -334,11 +549,12 @@ def write_par_file(
                 f"ratio {target_ratio}",
                 "",
                 f"TP_OVER_TE {tp_over_te}",
-                "beta_crit 1.0",
-                "beta_crit_coefficient 0.5",
+                f"beta_crit {beta_crit:.12g}",
+                f"beta_crit_coefficient {beta_crit_coefficient:.12g}",
                 f"with_electrons {electron_mode}",
                 "trat_small 1",
-                "trat_large 20",
+                f"trat_large {trat_large:.12g}",
+                f"positron_ratio {positron_ratio:.12g}",
                 "Thetae_max 1e100",
                 "",
             ]
@@ -633,6 +849,10 @@ class MunitTuner:
             spectrum_path=spec_path,
             electron_mode=self.context["electron_mode"],
             tp_over_te=self.args.tp_over_te,
+            trat_large=self.context["rhigh"],
+            beta_crit=self.context["beta_crit"],
+            beta_crit_coefficient=self.context["beta_crit_coeff"],
+            positron_ratio=self.context["positron_ratio"],
             bias_ns=self.args.fit_bias_ns,
             bias_start=self.args.bias,
             target_ratio=self.args.target_ratio,
@@ -848,6 +1068,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--ns", type=float, default=1e6, help="Photon count for tuning runs.")
     parser.add_argument("--mbh", type=float, default=6.5e9, help="Black hole mass in Msun.")
     parser.add_argument("--tp-over-te", type=float, default=3.0, help="TP_OVER_TE value.")
+    parser.add_argument(
+        "--positron-ratio",
+        type=float,
+        default=None,
+        help=(
+            "Override positron_ratio passed to GRMONTY. "
+            "If unset, inferred from CSV (pos/positron columns) or defaults to 0."
+        ),
+    )
 
     parser.add_argument(
         "--fit-bias-ns",
@@ -941,74 +1170,124 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
 
     row = load_row(args.csv, args.row)
-    context = build_context(row)
-
-    pos = str(context["pos"]).strip()
-    try:
-        if float(pos) != 0.0:
-            print(
-                "[note] using nonzero pos: GRMONTY applies pair scaling internally; "
-                "do not pre-scale M_unit by (1+2*pos).",
-                flush=True,
-            )
-    except ValueError:
-        pass
-    munit_key = f"MunitUsed_pos{pos}"
-
-    munit_used = row.get(munit_key, "")
-    default_munit: float
-
-    if isinstance(munit_used, str):
-        munit_used = munit_used.strip()
-
-    if munit_used:
-        try:
-            default_munit = float(munit_used)
-            print(
-                f"[init] using CSV {munit_key}={default_munit:.4e}",
-                flush=True,
-            )
-        except ValueError:
-            print(
-                f"[warn] invalid {munit_key}='{munit_used}', "
-                "falling back to state default",
-                flush=True,
-            )
-            default_munit = STATE_DEFAULT_MUNIT[context["state"]]
-    else:
-        default_munit = STATE_DEFAULT_MUNIT[context["state"]]
-
-    # optional override if you ever add --init-munit
-    init_munit = (
-        args.init_munit
-        if hasattr(args, "init_munit") and args.init_munit
-        else default_munit
-    )
-
-    bracketer = MunitBracketer(
-        target_flux=args.target_flux,
-        rel_tol=args.rel_tol,
-        abs_tol=args.abs_tol,
-    )
-
-    tuner = MunitTuner(context=context, args=args, bracketer=bracketer, row=row)
-
-    try:
-        best_trial = tuner.solve(init_munit)
-    except subprocess.CalledProcessError as exc:
-        print(
-            f"[error] GRMONTY failed (see log). Command: {exc.cmd}",
-            file=sys.stderr,
+    positron_runs = resolve_positron_runs(row, override=args.positron_ratio)
+    if len(positron_runs) > 1:
+        tags = ", ".join(
+            f"pos{format_pos_tag(ratio)}"
+            for ratio, _ in positron_runs
         )
-        raise
+        print(
+            f"[ctx] no explicit positron field; auto-running branches from CSV columns: {tags}",
+            flush=True,
+        )
 
-    tuner.cleanup(best_trial)
-    print(
-        f"[done] best trial: #{best_trial.index:02d} "
-        f"M_unit={best_trial.munit:.6e} flux={best_trial.flux:.4f} Jy "
-        f"(target {args.target_flux:.3f} Jy)",
-        flush=True,
-    )
+    for run_idx, (branch_ratio, branch_source) in enumerate(positron_runs, start=1):
+        if len(positron_runs) > 1:
+            print(
+                f"[ctx] ----- branch {run_idx}/{len(positron_runs)} "
+                f"(positron_ratio={branch_ratio:.6g}, source={branch_source}) -----",
+                flush=True,
+            )
+
+        context = build_context(row, positron_ratio_override=branch_ratio)
+        context["positron_source"] = branch_source
+
+        pos = str(context["pos"]).strip()
+        positron_ratio = float(context["positron_ratio"])
+
+        print(
+            f"[ctx] positron_ratio={positron_ratio:.6g} (source={context['positron_source']})",
+            flush=True,
+        )
+        if context["positron_source"] == "default":
+            has_pos_munit_cols = any(
+                _norm_key(str(key)).startswith(_norm_key("MunitUsed_pos"))
+                for key in row.keys()
+            )
+            if has_pos_munit_cols:
+                print(
+                    "[note] CSV has MunitUsed_pos* columns but no explicit positron field; "
+                    "defaulted to positron_ratio=0. Use --positron-ratio to select nonzero pairs.",
+                    flush=True,
+                )
+        if positron_ratio != 0.0:
+            print(
+                "[note] nonzero positron_ratio: GRMONTY applies pair scaling internally; "
+                "do not pre-scale M_unit by (1+2*positron_ratio).",
+                flush=True,
+            )
+
+        munit_key = f"MunitUsed_pos{pos}"
+
+        munit_used, matched_key = find_row_value(
+            row, *candidate_munit_keys(positron_ratio, pos)
+        )
+        default_munit: float
+
+        if munit_used:
+            try:
+                default_munit = float(munit_used)
+                print(
+                    f"[init] using CSV {matched_key}={default_munit:.4e}",
+                    flush=True,
+                )
+            except ValueError:
+                print(
+                    f"[warn] invalid {matched_key}='{munit_used}', "
+                    "falling back to state default",
+                    flush=True,
+                )
+                default_munit = STATE_DEFAULT_MUNIT[context["state"]]
+        else:
+            fallback_raw, fallback_key = find_row_value(row, "Munit", "M_unit")
+            if fallback_raw:
+                try:
+                    default_munit = float(fallback_raw)
+                    print(
+                        f"[init] no {munit_key} in CSV; using {fallback_key}={default_munit:.4e}",
+                        flush=True,
+                    )
+                except ValueError:
+                    print(
+                        f"[warn] invalid {fallback_key}='{fallback_raw}', "
+                        "falling back to state default",
+                        flush=True,
+                    )
+                    default_munit = STATE_DEFAULT_MUNIT[context["state"]]
+            else:
+                default_munit = STATE_DEFAULT_MUNIT[context["state"]]
+
+        # optional override if you ever add --init-munit
+        init_munit = (
+            args.init_munit
+            if hasattr(args, "init_munit") and args.init_munit
+            else default_munit
+        )
+
+        bracketer = MunitBracketer(
+            target_flux=args.target_flux,
+            rel_tol=args.rel_tol,
+            abs_tol=args.abs_tol,
+        )
+
+        tuner = MunitTuner(context=context, args=args, bracketer=bracketer, row=row)
+
+        try:
+            best_trial = tuner.solve(init_munit)
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"[error] GRMONTY failed (see log). Command: {exc.cmd}",
+                file=sys.stderr,
+            )
+            raise
+
+        tuner.cleanup(best_trial)
+        print(
+            f"[done] best trial: #{best_trial.index:02d} "
+            f"M_unit={best_trial.munit:.6e} flux={best_trial.flux:.4f} Jy "
+            f"(target {args.target_flux:.3f} Jy)",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

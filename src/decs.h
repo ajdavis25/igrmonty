@@ -24,6 +24,18 @@
 #define NUCUT (5.e13)
 #define GAMMACUT (1000.)
 #define SCATTERING_THETAE_MAX (1000.)
+#define BIAS_ABORT_RATIO (10.0)
+
+#define RUN_STATUS_UNKNOWN (0)
+#define RUN_STATUS_RUNNING (1)
+#define RUN_STATUS_OK (2)
+#define RUN_STATUS_ABORT_BIAS (3)
+#define RUN_STATUS_ZONE_ERROR (4)
+#define RUN_STATUS_INIT_ERROR (5)
+#define RUN_STATUS_KILLED (6)
+
+#define RUN_STATUS_MAXLEN (64)
+#define RUN_STATUS_DETAIL_MAXLEN (160)
 
 #define N_COMPTBINS (3) // e.g., once, twice, >twice
 #define N_TYPEBINS (2*(N_COMPTBINS+1)) // synch & brems
@@ -151,6 +163,19 @@ extern double TP_OVER_TE;
 extern double positron_ratio;
 
 extern double max_tau_scatt, Ladv, dMact, bias_norm, biasTuning;
+extern int run_status_code;
+extern char run_status[RUN_STATUS_MAXLEN];
+extern char run_status_detail[RUN_STATUS_DETAIL_MAXLEN];
+
+#define SET_RUN_STATUS(_code, _label, _detail)                                    \
+  do                                                                               \
+  {                                                                                \
+    run_status_code = (_code);                                                     \
+    snprintf(run_status, RUN_STATUS_MAXLEN, "%s",                                 \
+             ((_label) != NULL) ? (_label) : "unknown");                          \
+    snprintf(run_status_detail, RUN_STATUS_DETAIL_MAXLEN, "%s",                   \
+             ((_detail) != NULL) ? (_detail) : "");                               \
+  } while (0)
 
 // Macros
 #define NULL_CHECK(val,msg,fail) if (val == NULL) { fprintf(stderr, "%s\n", msg); exit(fail); }
