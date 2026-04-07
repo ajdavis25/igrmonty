@@ -5,6 +5,17 @@
 static const double K0_MAX = 1.e6;
 static const double GAMMA_E_MIN = 1.0;
 static const double BETA_E_MIN = 1.e-12;
+static const int SAMPLE_KLEIN_NISHINA_MAX_ATTEMPTS = 10000000;
+static const int SAMPLE_ELECTRON_MAX_ATTEMPTS = 10000000;
+static const int SAMPLE_BETA_DIST_MAX_ATTEMPTS = 10000000;
+
+static void fail_sampling(const char *detail)
+{
+	SET_RUN_STATUS(RUN_STATUS_SAMPLING_ERROR, "sampling_error", detail);
+	fprintf(stderr, "sampling_error: %s\n", detail);
+	fflush(stderr);
+	exit(-1);
+}
 
 /*
 
@@ -218,6 +229,13 @@ double sample_klein_nishina(double k0)
 		x1 *= monty_rand();
 
 		n++;
+		if (n > SAMPLE_KLEIN_NISHINA_MAX_ATTEMPTS) {
+			char detail[RUN_STATUS_DETAIL_MAXLEN];
+			snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+			         "sample_klein_nishina_stalled k0=%g attempts=%d",
+			         k0, n);
+			fail_sampling(detail);
+		}
 
 	} while (x1 >= klein_nishina(k0, k0p_tent));
 
@@ -251,8 +269,8 @@ double klein_nishina(double a, double ap)
 
 void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 {
-	double beta_e, mu, phi, cphi, sphi, gamma_e, sigma_KN;
-	double K, sth, cth, x1, n0dotv0, v0, v1;
+	double beta_e, mu = 0., phi, cphi, sphi, gamma_e = 0., sigma_KN = 0.;
+	double K = 0., sth, cth, x1 = 0., n0dotv0, v0, v1;
 	double n0x, n0y, n0z;
 	double v0x, v0y, v0z;
 	double v1x, v1y, v1z;
@@ -264,13 +282,12 @@ void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 	}
 
 	while (1) {
-		if (sample_cnt > 10000000) {
-			fprintf(stderr,
-				"in sample_electron mu, gamma_e, K, sigma_KN, x1: %g %g %g %g %g %g\n",
-				Thetae, mu, gamma_e, K, sigma_KN, x1);
-			// This is a kluge to prevent stalling for large values of \Theta_e 
-			Thetae *= 0.5;
-			sample_cnt = 0;
+		if (sample_cnt > SAMPLE_ELECTRON_MAX_ATTEMPTS) {
+			char detail[RUN_STATUS_DETAIL_MAXLEN];
+			snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+			         "sample_electron_stalled Thetae=%g mu=%g gamma_e=%g K=%g sigma_KN=%g x1=%g attempts=%d",
+			         Thetae, mu, gamma_e, K, sigma_KN, x1, sample_cnt);
+			fail_sampling(detail);
 		}
 
 		sample_cnt++;
@@ -500,13 +517,29 @@ void sample_beta_distr_num(double Thetae, double *gamma_e, double *beta_e)
 
   double f_max = fdist(ge_max, Thetae);
   gsl_root_fsolver_free(s);
+  if (!(f_max > 0.0) || !isfinite(f_max)) {
+    char detail[RUN_STATUS_DETAIL_MAXLEN];
+    snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+             "sample_beta_distr_invalid_fmax Thetae=%g f_max=%g ge_max=%g",
+             Thetae, f_max, ge_max);
+    fail_sampling(detail);
+  }
   //fprintf(stderr, "max is %g at %g for %g\n", f_max, ge_max, Thetae);
   
   // Sample electron gamma
   double ge_samp;
+  int sample_attempts = 0;
+  double lge_min = log(GSL_MAX(1., 0.01*Thetae));
+  double lge_max = log(GSL_MAX(100., 1000.*Thetae));
   do {
-    double lge_min = log(GSL_MAX(1., 0.01*Thetae));
-    double lge_max = log(GSL_MAX(100., 1000.*Thetae));
+    sample_attempts++;
+    if (sample_attempts > SAMPLE_BETA_DIST_MAX_ATTEMPTS) {
+      char detail[RUN_STATUS_DETAIL_MAXLEN];
+      snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+               "sample_beta_distr_stalled Thetae=%g f_max=%g attempts=%d",
+               Thetae, f_max, sample_attempts);
+      fail_sampling(detail);
+    }
     ge_samp = exp(lge_min + (lge_max - lge_min)*monty_rand()); 
   } while (fdist(ge_samp, Thetae)/f_max < monty_rand());
 

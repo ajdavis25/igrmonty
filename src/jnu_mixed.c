@@ -34,6 +34,8 @@ static double int_jnu_thermal(double Ne, double Thetae, double Bmag, double nu);
 static double int_jnu_kappa(double Ne, double Thetae, double Bmag, double nu);
 static double int_jnu_powerlaw(double Ne, double Thetae, double Bmag, double nu);
 static double int_jnu_bremss(double Ne, double Thetae, double nu);
+static void bremss_pair_coeffs(double Thetae, double *Fei, double *Fee_same,
+                               double *Fee_opp);
 
 static inline int thetae_in_valid_range(double *Thetae)
 {
@@ -188,14 +190,14 @@ static double jnu_bremss(double nu, double Ne, double Thetae)
   }
 
 #if 1 // following Straub+ 2012
-  double Fei = 0., Fee = 0., fei = 0., fee = 0.;
+  double Fei = 0., Fee_same = 0., Fee_opp = 0.;
+  double fei = 0., fee_same = 0., fee_opp = 0.;
   double ni = fmax(Ne, 0.0);
   double nlep = fmax(lepton_density_total(Ne), 0.0);
   double ne_minus = fmax(electron_density_minus(Ne), 0.0);
   double ne_plus = fmax(positron_density_plus(Ne), 0.0);
 
   double SOMMERFELD_ALPHA = 1. / 137.036;
-  double eta = 0.5616;
   double e_charge = 4.80e-10; // in esu
   double re = e_charge * e_charge / ME / CL / CL;
   double gammaE = 0.577; // = - Log[0.5616]
@@ -209,24 +211,19 @@ static double jnu_bremss(double nu, double Ne, double Thetae)
     gff = sqrt(3.) / M_PI * log(4 / gammaE / x);
   }
 
-  if (Thetae < 1)
-  {
-    Fei = 4. * sqrt(2. * Thetae / M_PI / M_PI / M_PI) * (1. + 1.781 * pow(Thetae, 1.34));
-    Fee = 20. / 9. / sqrt(M_PI) * (44. - 3. * M_PI * M_PI) * pow(Thetae, 1.5);
-    Fee *= (1. + 1.1 * Thetae + Thetae * Thetae - 1.25 * pow(Thetae, 2.5));
-  }
-  else
-  {
-    Fei = 9. * Thetae / (2. * M_PI) * (log(1.123 * Thetae + 0.48) + 1.5);
-    Fee = 24. * Thetae * (log(2. * eta * Thetae) + 1.28);
-  }
-  // Pair-aware brems model:
-  //  - e-i term scales as n_i * n_lep_total (required minimum behavior).
-  //  - e-e term uses same-sign lepton pairs only: n_-^2 + n_+^2.
+  bremss_pair_coeffs(Thetae, &Fei, &Fee_same, &Fee_opp);
+  // Complete thermal pair-aware brems model:
+  //  - e-i term scales as n_i * n_lep_total.
+  //  - same-sign lepton term uses n_-^2 + n_+^2.
+  //  - opposite-sign lepton term uses n_- * n_+ with the expected
+  //    Svensson asymptotes: ~2 sqrt(2) x e-i in the nonrelativistic limit
+  //    and 2 x e-e in the relativistic limit.
   fei = ni * nlep * SIGMA_THOMSON * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fei;
-  fee = (ne_minus * ne_minus + ne_plus * ne_plus) * re * re * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fee;
+  fee_same = (ne_minus * ne_minus + ne_plus * ne_plus) * re * re * SOMMERFELD_ALPHA *
+             ME * CL * CL * CL * Fee_same;
+  fee_opp = (ne_minus * ne_plus) * re * re * SOMMERFELD_ALPHA * ME * CL * CL * CL * Fee_opp;
 
-  return (fei + fee) / (4. * M_PI) * HPL / KBOL / Te * efac * gff;
+  return (fei + fee_same + fee_opp) / (4. * M_PI) * HPL / KBOL / Te * efac * gff;
 
 #else
   // Method from Rybicki & Lightman, ultimately from Novikov & Thorne
@@ -242,6 +239,35 @@ static double jnu_bremss(double nu, double Ne, double Thetae)
 
   return jv;
 #endif
+}
+
+static void bremss_pair_coeffs(double Thetae, double *Fei, double *Fee_same,
+                               double *Fee_opp)
+{
+  double Fei_local = 0.;
+  double Fee_same_local = 0.;
+  double Fee_opp_local = 0.;
+  if (Thetae < 1.)
+  {
+    Fei_local = 4. * sqrt(2. * Thetae / M_PI / M_PI / M_PI) *
+                (1. + 1.781 * pow(Thetae, 1.34));
+    Fee_same_local = 20. / 9. / sqrt(M_PI) * (44. - 3. * M_PI * M_PI) *
+                     pow(Thetae, 1.5);
+    Fee_same_local *=
+        (1. + 1.1 * Thetae + Thetae * Thetae - 1.25 * pow(Thetae, 2.5));
+    Fee_opp_local = 2. * sqrt(2.) * Fei_local;
+  }
+  else
+  {
+    double eta = 0.5616;
+    Fei_local = 9. * Thetae / (2. * M_PI) * (log(1.123 * Thetae + 0.48) + 1.5);
+    Fee_same_local = 24. * Thetae * (log(2. * eta * Thetae) + 1.28);
+    Fee_opp_local = 2. * Fee_same_local;
+  }
+
+  *Fei = Fei_local;
+  *Fee_same = Fee_same_local;
+  *Fee_opp = Fee_opp_local;
 }
 
 #define CST 1.88774862536 /* 2^{11/12} */

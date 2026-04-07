@@ -10,6 +10,13 @@ MBH           4.6e+6 # central black hole mass
 M_unit        1e+16  # mass unit for the plasma in the accretion flow
 TP_OVER_TE    3.     # proton-electron temperature ratio
 positron_ratio 0.0   # pair enrichment: n_+ = positron_ratio * n_i, n_lep = (1+2*positron_ratio)*n_i
+sigma_transition 2.0        # mixed-jet heating transition (RBETAwJET / CRITBETAwJET)
+constant_beta_e0 0.1        # additive constant-beta electron heating term
+constant_beta_e0_exponent 0 # exponent used in the constant-beta supplement
+jet_sigma_cut 10            # jet/funnel sigma cut; <=0 disables sigma-based jet mask
+jet_beta_cut 0.1            # jet/funnel beta cut; <=0 disables beta-based jet mask
+jet_thetae 50               # fixed Thetae override inside the jet mask
+jet_ne_mult 1               # density multiplier inside the jet mask
 
 dump          dump_00001200.h5 # input GRMHD snapshot
 spectrum      spectrum.h5      # output spectral data

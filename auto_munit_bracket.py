@@ -66,6 +66,16 @@ FREQ_TARGET_HZ = 230.0e9
 F_TARGET_JY = 0.5
 DEFAULT_BETA_CRIT = 1.0
 DEFAULT_BETA_CRIT_COEFF = 0.5
+WJET_ELECTRON_MODES = {4, 5}
+WJET_DEFAULTS: Dict[str, float] = {
+    "sigma_transition": 2.0,
+    "constant_beta_e0": 0.1,
+    "constant_beta_e0_exponent": 0.0,
+    "jet_sigma_cut": 10.0,
+    "jet_beta_cut": 0.1,
+    "jet_thetae": 50.0,
+    "jet_ne_mult": 1.0,
+}
 
 PC_TO_CM = 3.085677581e18
 D_CM = D_MPC * 1e6 * PC_TO_CM
@@ -156,6 +166,13 @@ def parse_nonnegative_float(raw: object, label: str) -> float:
     return value
 
 
+def parse_finite_float(raw: object, label: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError(f"{label} must be finite (got {raw!r})")
+    return value
+
+
 def format_float_tag(value: float) -> str:
     """compact stable tag used in output filenames/log tags."""
     nearest = round(value)
@@ -207,6 +224,48 @@ def resolve_critbeta_params(row: dict, *, model: str) -> Tuple[float, float]:
         )
 
     return beta_crit, beta_crit_coeff
+
+
+def resolve_wjet_params(
+    row: dict, *, model: str, args: argparse.Namespace
+) -> Tuple[Dict[str, float], Dict[str, str]]:
+    """resolve wJET controls from CLI, CSV, or repo defaults."""
+    if infer_electron_mode(model) not in WJET_ELECTRON_MODES:
+        return {}, {}
+
+    specs = (
+        ("sigma_transition", ("sigma_transition", "sigmaTransition")),
+        ("constant_beta_e0", ("constant_beta_e0", "constantBetaE0")),
+        (
+            "constant_beta_e0_exponent",
+            ("constant_beta_e0_exponent", "constantBetaE0Exponent"),
+        ),
+        ("jet_sigma_cut", ("jet_sigma_cut", "jetSigmaCut")),
+        ("jet_beta_cut", ("jet_beta_cut", "jetBetaCut")),
+        ("jet_thetae", ("jet_thetae", "jetThetae")),
+        ("jet_ne_mult", ("jet_ne_mult", "jetNeMult")),
+    )
+
+    values: Dict[str, float] = {}
+    sources: Dict[str, str] = {}
+
+    for name, candidate_keys in specs:
+        cli_value = getattr(args, name, None)
+        if cli_value is not None:
+            values[name] = parse_finite_float(cli_value, f"--{name.replace('_', '-')}")
+            sources[name] = "cli"
+            continue
+
+        raw, key = find_row_value(row, *candidate_keys)
+        if raw is not None:
+            values[name] = parse_finite_float(raw, f"CSV column '{key}'")
+            sources[name] = f"csv:{key}"
+            continue
+
+        values[name] = WJET_DEFAULTS[name]
+        sources[name] = "default"
+
+    return values, sources
 
 
 def resolve_positron_ratio(
@@ -324,7 +383,12 @@ def infer_electron_mode(model: str) -> int:
         raise ValueError(f"Unknown model '{model}' for electron mode mapping") from exc
 
 
-def build_context(row: dict, *, positron_ratio_override: Optional[float] = None) -> dict:
+def build_context(
+    row: dict,
+    *,
+    args: argparse.Namespace,
+    positron_ratio_override: Optional[float] = None,
+) -> dict:
     """build a context dict (metadata) for this tuning job from the CSV row."""
     state = require_row_value(row, "state", "MAD/SANE").upper()
     if state not in STATE_DEFAULT_MUNIT:
@@ -344,6 +408,7 @@ def build_context(row: dict, *, positron_ratio_override: Optional[float] = None)
         raise ValueError(f"Rhigh/trat_large must be > 0 (got {rhigh_raw!r})")
     rhigh_tag = format_float_tag(rhigh)
     beta_crit, beta_crit_coeff = resolve_critbeta_params(row, model=model)
+    wjet_params, wjet_param_sources = resolve_wjet_params(row, model=model, args=args)
     beta_crit_tag = format_float_tag(beta_crit)
     beta_crit_coeff_tag = format_float_tag(beta_crit_coeff)
     state_prefix = state_to_prefix(state)
@@ -374,6 +439,8 @@ def build_context(row: dict, *, positron_ratio_override: Optional[float] = None)
         "rhigh": rhigh,
         "beta_crit": beta_crit,
         "beta_crit_coeff": beta_crit_coeff,
+        "wjet_params": wjet_params,
+        "wjet_param_sources": wjet_param_sources,
         "pos": pos,
         "positron_ratio": positron_ratio,
         "positron_source": positron_source,
@@ -528,38 +595,66 @@ def write_par_file(
     beta_crit: float,
     beta_crit_coefficient: float,
     positron_ratio: float,
+    sigma_transition: Optional[float],
+    constant_beta_e0: Optional[float],
+    constant_beta_e0_exponent: Optional[float],
+    jet_sigma_cut: Optional[float],
+    jet_beta_cut: Optional[float],
+    jet_thetae: Optional[float],
+    jet_ne_mult: Optional[float],
     bias_ns: int,
     bias_start: float,
     target_ratio: float,
 ) -> None:
     """write a GRMONTY parameter (.par) file for a single trial."""
-    path.write_text(
-        "\n".join(
-            [
-                "seed -1",
-                f"Ns {ns}",
-                f"MBH {mbh}",
-                f"M_unit {m_unit:.8e}",
-                f"dump {dump_file}",
-                f"spectrum {spectrum_path}",
-                "",
-                "fit_bias 1",  # 0 off or 1 on
-                f"fit_bias_ns {bias_ns}",
-                f"bias {bias_start}",
-                f"ratio {target_ratio}",
-                "",
-                f"TP_OVER_TE {tp_over_te}",
-                f"beta_crit {beta_crit:.12g}",
-                f"beta_crit_coefficient {beta_crit_coefficient:.12g}",
-                f"with_electrons {electron_mode}",
-                "trat_small 1",
-                f"trat_large {trat_large:.12g}",
-                f"positron_ratio {positron_ratio:.12g}",
-                "Thetae_max 1e100",
-                "",
-            ]
+    lines = [
+        "seed -1",
+        f"Ns {ns}",
+        f"MBH {mbh}",
+        f"M_unit {m_unit:.8e}",
+        f"dump {dump_file}",
+        f"spectrum {spectrum_path}",
+        "",
+        "fit_bias 1",  # 0 off or 1 on
+        f"fit_bias_ns {bias_ns}",
+        f"bias {bias_start}",
+        f"ratio {target_ratio}",
+        "",
+        f"TP_OVER_TE {tp_over_te}",
+        f"beta_crit {beta_crit:.12g}",
+        f"beta_crit_coefficient {beta_crit_coefficient:.12g}",
+        f"with_electrons {electron_mode}",
+        "trat_small 1",
+        f"trat_large {trat_large:.12g}",
+    ]
+
+    if electron_mode in WJET_ELECTRON_MODES:
+        wjet_pairs = (
+            ("sigma_transition", sigma_transition),
+            ("constant_beta_e0", constant_beta_e0),
+            ("constant_beta_e0_exponent", constant_beta_e0_exponent),
+            ("jet_sigma_cut", jet_sigma_cut),
+            ("jet_beta_cut", jet_beta_cut),
+            ("jet_thetae", jet_thetae),
+            ("jet_ne_mult", jet_ne_mult),
         )
+        missing = [name for name, value in wjet_pairs if value is None]
+        if missing:
+            raise ValueError(
+                "Missing wJET parameters for mixed-jet electron mode: "
+                + ", ".join(missing)
+            )
+        lines.extend(f"{name} {value:.12g}" for name, value in wjet_pairs)
+
+    lines.extend(
+        [
+            f"positron_ratio {positron_ratio:.12g}",
+            "Thetae_max 1e100",
+            "",
+        ]
     )
+
+    path.write_text("\n".join(lines))
 
 
 def parse_munit_from_par(par_path: Path) -> float:
@@ -779,6 +874,7 @@ class MunitTuner:
             "spin",
             "dump_index",
             "pos",
+            "positron_ratio",
             "iteration",
             "M_unit",
             "flux_Jy",
@@ -786,6 +882,13 @@ class MunitTuner:
             "freq_target_Hz",
             "p_factor",
             "Ns",
+            "sigma_transition",
+            "constant_beta_e0",
+            "constant_beta_e0_exponent",
+            "jet_sigma_cut",
+            "jet_beta_cut",
+            "jet_thetae",
+            "jet_ne_mult",
             "converged",
             "resumed_trial",
             "spec_path",
@@ -807,6 +910,7 @@ class MunitTuner:
                     "spin": self.context["spin"],
                     "dump_index": self.context["dump_index"],
                     "pos": self.context["pos"],
+                    "positron_ratio": f"{self.context['positron_ratio']:.12g}",
                     "iteration": trial.index,
                     "M_unit": f"{trial.munit:.8e}",
                     "flux_Jy": f"{trial.flux:.8e}",
@@ -814,6 +918,15 @@ class MunitTuner:
                     "freq_target_Hz": f"{self.args.freq_target:.8e}",
                     "p_factor": f"{self.args.p_factor:.3f}",
                     "Ns": f"{self.args.ns:.3e}",
+                    "sigma_transition": self.context["wjet_params"].get("sigma_transition", ""),
+                    "constant_beta_e0": self.context["wjet_params"].get("constant_beta_e0", ""),
+                    "constant_beta_e0_exponent": self.context["wjet_params"].get(
+                        "constant_beta_e0_exponent", ""
+                    ),
+                    "jet_sigma_cut": self.context["wjet_params"].get("jet_sigma_cut", ""),
+                    "jet_beta_cut": self.context["wjet_params"].get("jet_beta_cut", ""),
+                    "jet_thetae": self.context["wjet_params"].get("jet_thetae", ""),
+                    "jet_ne_mult": self.context["wjet_params"].get("jet_ne_mult", ""),
                     "converged": int(bool(converged)),
                     "resumed_trial": int(bool(is_resumed)),
                     "spec_path": str(trial.spec_path),
@@ -853,6 +966,15 @@ class MunitTuner:
             beta_crit=self.context["beta_crit"],
             beta_crit_coefficient=self.context["beta_crit_coeff"],
             positron_ratio=self.context["positron_ratio"],
+            sigma_transition=self.context["wjet_params"].get("sigma_transition"),
+            constant_beta_e0=self.context["wjet_params"].get("constant_beta_e0"),
+            constant_beta_e0_exponent=self.context["wjet_params"].get(
+                "constant_beta_e0_exponent"
+            ),
+            jet_sigma_cut=self.context["wjet_params"].get("jet_sigma_cut"),
+            jet_beta_cut=self.context["wjet_params"].get("jet_beta_cut"),
+            jet_thetae=self.context["wjet_params"].get("jet_thetae"),
+            jet_ne_mult=self.context["wjet_params"].get("jet_ne_mult"),
             bias_ns=self.args.fit_bias_ns,
             bias_start=self.args.bias,
             target_ratio=self.args.target_ratio,
@@ -1077,6 +1199,48 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "If unset, inferred from CSV (pos/positron columns) or defaults to 0."
         ),
     )
+    parser.add_argument(
+        "--sigma-transition",
+        type=float,
+        default=None,
+        help="Override sigma_transition for RBETAwJET/CRITBETAwJET runs.",
+    )
+    parser.add_argument(
+        "--constant-beta-e0",
+        type=float,
+        default=None,
+        help="Override constant_beta_e0 for RBETAwJET/CRITBETAwJET runs.",
+    )
+    parser.add_argument(
+        "--constant-beta-e0-exponent",
+        type=float,
+        default=None,
+        help="Override constant_beta_e0_exponent for RBETAwJET/CRITBETAwJET runs.",
+    )
+    parser.add_argument(
+        "--jet-sigma-cut",
+        type=float,
+        default=None,
+        help="Override jet_sigma_cut for RBETAwJET/CRITBETAwJET runs.",
+    )
+    parser.add_argument(
+        "--jet-beta-cut",
+        type=float,
+        default=None,
+        help="Override jet_beta_cut for RBETAwJET/CRITBETAwJET runs.",
+    )
+    parser.add_argument(
+        "--jet-thetae",
+        type=float,
+        default=None,
+        help="Override jet_thetae for RBETAwJET/CRITBETAwJET runs.",
+    )
+    parser.add_argument(
+        "--jet-ne-mult",
+        type=float,
+        default=None,
+        help="Override jet_ne_mult for RBETAwJET/CRITBETAwJET runs.",
+    )
 
     parser.add_argument(
         "--fit-bias-ns",
@@ -1189,7 +1353,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 flush=True,
             )
 
-        context = build_context(row, positron_ratio_override=branch_ratio)
+        context = build_context(
+            row,
+            args=args,
+            positron_ratio_override=branch_ratio,
+        )
         context["positron_source"] = branch_source
 
         pos = str(context["pos"]).strip()
@@ -1216,6 +1384,26 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 "do not pre-scale M_unit by (1+2*positron_ratio).",
                 flush=True,
             )
+        if context["wjet_params"]:
+            wjet_fields = (
+                "sigma_transition",
+                "constant_beta_e0",
+                "constant_beta_e0_exponent",
+                "jet_sigma_cut",
+                "jet_beta_cut",
+                "jet_thetae",
+                "jet_ne_mult",
+            )
+            summary = " ".join(
+                f"{name}={context['wjet_params'][name]:.12g}"
+                for name in wjet_fields
+            )
+            sources = " ".join(
+                f"{name}:{context['wjet_param_sources'][name]}"
+                for name in wjet_fields
+            )
+            print(f"[ctx] wjet {summary}", flush=True)
+            print(f"[ctx] wjet_sources {sources}", flush=True)
 
         munit_key = f"MunitUsed_pos{pos}"
 

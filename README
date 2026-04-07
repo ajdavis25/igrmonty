@@ -56,8 +56,38 @@ When `positron_ratio = f`:
 - total radiating/scattering leptons `n_lep = (1 + 2 f) * n_i`
 
 GRMONTY applies this internally for synchrotron and scattering.
-Bremsstrahlung uses pair-aware density factors with at least
-`e-i` scaling `proportional to n_i * n_lep`.
+Bremsstrahlung now includes all thermal pair channels:
+- `e-i` scaling `proportional to n_i * n_lep`
+- same-sign lepton brems (`e^-e^-` and `e^+e^+`)
+- opposite-sign lepton brems (`e^-e^+`)
 
 Downstream scripts should pass baryonic `M_unit` and should not pre-scale
 density/M_unit by `(1 + 2 f)`, or pairs will be double-counted.
+
+
+## wJET controls
+
+Mixed jet modes (`RBETAwJET`, `CRITBETAwJET`) require the following controls
+to fully activate the jet/funnel logic:
+- `sigma_transition`
+- `constant_beta_e0`
+- `constant_beta_e0_exponent`
+- `jet_sigma_cut`
+- `jet_beta_cut`
+- `jet_thetae`
+- `jet_ne_mult`
+
+`auto_munit_bracket.py` now writes these controls into generated `.par` files
+for `wJET` modes. Resolution order is:
+1. CLI override (`--sigma-transition`, `--constant-beta-e0`, `--constant-beta-e0-exponent`, `--jet-sigma-cut`, `--jet-beta-cut`, `--jet-thetae`, `--jet-ne-mult`)
+2. CSV column if present
+3. repo defaults (`2.0`, `0.1`, `0.0`, `10`, `0.1`, `50`, `1`)
+
+
+## Compton sampling guardrails
+
+The rejection samplers in `src/compton.c` no longer silently halve `Thetae`
+after repeated failures. They now fail loudly with `sampling_error` diagnostics
+if Klein-Nishina, electron, or beta-distribution sampling exceeds its hard
+attempt cap. This is intended to stop invalid production `wJET` runs instead of
+quietly mutating the scattering physics.

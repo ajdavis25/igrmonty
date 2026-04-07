@@ -3,6 +3,77 @@
 #include "compton.h"
 #include "model_radiation.h"
 
+static void minimal_bremss_coeffs(double Thetae, double *Fei, double *Fee_same)
+{
+  if (Thetae < 1.)
+  {
+    *Fei = 4. * sqrt(2. * Thetae / M_PI / M_PI / M_PI) *
+           (1. + 1.781 * pow(Thetae, 1.34));
+    *Fee_same = 20. / 9. / sqrt(M_PI) * (44. - 3. * M_PI * M_PI) *
+                pow(Thetae, 1.5);
+    *Fee_same *=
+        (1. + 1.1 * Thetae + Thetae * Thetae - 1.25 * pow(Thetae, 2.5));
+  }
+  else
+  {
+    const double eta = 0.5616;
+    *Fei = 9. * Thetae / (2. * M_PI) * (log(1.123 * Thetae + 0.48) + 1.5);
+    *Fee_same = 24. * Thetae * (log(2. * eta * Thetae) + 1.28);
+  }
+}
+
+static void check_pair_brems_channel(double Thetae, double Ne, double theta)
+{
+  double Fei = 0.;
+  double Fee_same = 0.;
+  double ei_strength;
+  double ee_strength;
+  double jb0, jb05, jb1;
+  double minimal_ratio_05;
+  double minimal_ratio_1;
+
+  minimal_bremss_coeffs(Thetae, &Fei, &Fee_same);
+  const double e_charge = 4.80e-10; // in esu
+  const double re = e_charge * e_charge / ME / CL / CL;
+  ei_strength = SIGMA_THOMSON * Fei;
+  ee_strength = re * re * Fee_same;
+  minimal_ratio_05 = (2.0 * ei_strength + 2.5 * ee_strength) /
+                     (ei_strength + ee_strength);
+  minimal_ratio_1 = (3.0 * ei_strength + 5.0 * ee_strength) /
+                    (ei_strength + ee_strength);
+
+  positron_ratio = 0.0;
+  jb0 = jnu(1.e10, Ne, Thetae, 0.0, theta);
+  positron_ratio = 0.5;
+  jb05 = jnu(1.e10, Ne, Thetae, 0.0, theta);
+  positron_ratio = 1.0;
+  jb1 = jnu(1.e10, Ne, Thetae, 0.0, theta);
+
+  if (!(jb0 > 0.0 && jb05 > jb0 && jb1 > jb05))
+  {
+    fprintf(stderr,
+            "pair scaling test failed: brems emissivity not monotonic for Thetae=%g (%g, %g, %g)\n",
+            Thetae, jb0, jb05, jb1);
+    exit(1);
+  }
+
+  if (!((jb05 / jb0) > minimal_ratio_05 * (1. + 1.e-8)))
+  {
+    fprintf(stderr,
+            "pair scaling test failed: missing e-e+ brems channel at Thetae=%g for f=0.5 (ratio=%g minimal=%g)\n",
+            Thetae, jb05 / jb0, minimal_ratio_05);
+    exit(1);
+  }
+
+  if (!((jb1 / jb0) > minimal_ratio_1 * (1. + 1.e-8)))
+  {
+    fprintf(stderr,
+            "pair scaling test failed: missing e-e+ brems channel at Thetae=%g for f=1 (ratio=%g minimal=%g)\n",
+            Thetae, jb1 / jb0, minimal_ratio_1);
+    exit(1);
+  }
+}
+
 void test_pair_scalings(void)
 {
   double old_ratio = positron_ratio;
@@ -42,15 +113,8 @@ void test_pair_scalings(void)
     exit(1);
   }
 
-  // Brems-dominated check (B=0): with pair-aware EI term this must increase.
-  positron_ratio = 0.0;
-  double jb0 = jnu(1.e10, Ne, Thetae, 0.0, theta);
-  positron_ratio = 1.0;
-  double jb1 = jnu(1.e10, Ne, Thetae, 0.0, theta);
-  if (!(jb1 > jb0)) {
-    fprintf(stderr, "pair scaling test failed: brems emissivity not increasing (%g -> %g)\n", jb0, jb1);
-    exit(1);
-  }
+  check_pair_brems_channel(0.2, Ne, theta);
+  check_pair_brems_channel(Thetae, Ne, theta);
 
   positron_ratio = old_ratio;
 }
