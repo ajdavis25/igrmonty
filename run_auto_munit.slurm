@@ -1,14 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=auto_munit_bhg
-#SBATCH --partition=anantuabhg
+#SBATCH --partition=anantuabhg,compute3,compute2,compute1
 #SBATCH --account=anantuabhg
 #SBATCH --nodes=1
-#SBATCH --ntasks=40
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --hint=nomultithread
-#SBATCH --time=20-00:01:00
-#SBATCH --output=/work/vmo703/igrmonty_logs/%x_%j.out
-#SBATCH --error=/work/vmo703/igrmonty_logs/%x_%j.err
+#SBATCH --time=3-00:00:00
+#SBATCH --array=0-47%5
+#SBATCH --output=/work/vmo703/igrmonty_logs/%x_%A_%a.out
+#SBATCH --error=/work/vmo703/igrmonty_logs/%x_%A_%a.err
 
 set -euo pipefail
 
@@ -27,32 +28,20 @@ export OMP_NUM_THREADS=1
 export OMP_PROC_BIND=true
 export OMP_PLACES=cores
 
-CSV_PATH="${CSV_PATH:-/work/vmo703/data/paper_output_dedupe.csv}"
+CSV_PATH="${CSV_PATH:-/work/vmo703/data/final_grmonty_paper.csv}"
 TOTAL_ROWS=$(( $(wc -l < "$CSV_PATH") - 1 ))
-MAX_CONCURRENT="${MAX_CONCURRENT:-${SLURM_NTASKS:-1}}"
 SKIP_CRIT_RHIGH_DUPES="${SKIP_CRIT_RHIGH_DUPES:-1}"
 EXPAND_POSITRON_BRANCHES="${EXPAND_POSITRON_BRANCHES:-1}"
-WORK_SHARDS="${WORK_SHARDS:-1}"
-WORK_SHARD_INDEX="${WORK_SHARD_INDEX:-0}"
 AUTO_MUNIT_RESUME="${AUTO_MUNIT_RESUME:-1}"
 
 TASK_LIST_FILE="$(mktemp)"
+trap 'rm -f "${TASK_LIST_FILE}"' EXIT
 export CSV_PATH
 export SKIP_CRIT_RHIGH_DUPES
 export EXPAND_POSITRON_BRANCHES
 
 if (( TOTAL_ROWS <= 0 )); then
   echo "[ERROR] no data rows found in ${CSV_PATH}" >&2
-  exit 1
-fi
-
-if ! [[ "${WORK_SHARDS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "[ERROR] WORK_SHARDS must be a positive integer (got ${WORK_SHARDS})" >&2
-  exit 1
-fi
-
-if ! [[ "${WORK_SHARD_INDEX}" =~ ^[0-9]+$ ]] || (( WORK_SHARD_INDEX >= WORK_SHARDS )); then
-  echo "[ERROR] WORK_SHARD_INDEX must satisfy 0 <= index < WORK_SHARDS (got ${WORK_SHARD_INDEX} of ${WORK_SHARDS})" >&2
   exit 1
 fi
 
@@ -219,44 +208,44 @@ for row_idx in selected_rows:
 PY
 
 mapfile -t TASK_LIST < "${TASK_LIST_FILE}"
-rm -f "${TASK_LIST_FILE}"
-
-SHARDED_TASKS=()
-for idx in "${!TASK_LIST[@]}"; do
-  if (( idx % WORK_SHARDS == WORK_SHARD_INDEX )); then
-    SHARDED_TASKS+=("${TASK_LIST[idx]}")
-  fi
-done
-TASK_LIST=("${SHARDED_TASKS[@]}")
 
 if (( ${#TASK_LIST[@]} == 0 )); then
-  echo "[INFO] job=${SLURM_JOB_ID} shard=${WORK_SHARD_INDEX}/${WORK_SHARDS} selected_tasks=0; nothing to do"
+  echo "[INFO] job=${SLURM_JOB_ID:-manual} selected_tasks=0; nothing to do"
   exit 0
 fi
 
-echo "[INFO] job=${SLURM_JOB_ID} csv=${CSV_PATH} total_rows=${TOTAL_ROWS} selected_tasks=${#TASK_LIST[@]} max_concurrent=${MAX_CONCURRENT} skip_crit_rhigh_dupes=${SKIP_CRIT_RHIGH_DUPES} expand_positron_branches=${EXPAND_POSITRON_BRANCHES} shard=${WORK_SHARD_INDEX}/${WORK_SHARDS}"
+TASK_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
+if ! [[ "${TASK_INDEX}" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] SLURM_ARRAY_TASK_ID must be a nonnegative integer (got ${TASK_INDEX})" >&2
+  exit 1
+fi
 
-for TASK in "${TASK_LIST[@]}"; do
-  while (( $(jobs -pr | wc -l) >= MAX_CONCURRENT )); do
-    sleep 1
-  done
+if (( TASK_INDEX >= ${#TASK_LIST[@]} )); then
+  echo "[INFO] task_index=${TASK_INDEX} selected_tasks=${#TASK_LIST[@]}; nothing to do"
+  exit 0
+fi
 
-  IFS=$'\t' read -r ROW POSITRON_RATIO TASK_SUFFIX <<< "${TASK}"
+if [[ -n "${SLURM_ARRAY_TASK_MAX:-}" ]] && (( SLURM_ARRAY_TASK_MAX + 1 < ${#TASK_LIST[@]} )); then
+  echo "[WARN] array range ends at ${SLURM_ARRAY_TASK_MAX}, but selected_tasks=${#TASK_LIST[@]}; later tasks will not run" >&2
+fi
 
-  CMD=(python "$BRACKET" --row "$ROW")
-  if [[ -n "${POSITRON_RATIO}" ]]; then
-    CMD+=(--positron-ratio "$POSITRON_RATIO")
-  fi
-  if [[ "${AUTO_MUNIT_RESUME}" == "1" ]]; then
-    CMD+=(--resume)
-  fi
+IFS=$'\t' read -r ROW POSITRON_RATIO TASK_SUFFIX <<< "${TASK_LIST[TASK_INDEX]}"
 
-  LOG_STEM="row_${SLURM_JOB_ID}_${ROW}${TASK_SUFFIX}"
+CMD=(python "$BRACKET" --csv "$CSV_PATH" --row "$ROW")
+if [[ -n "${POSITRON_RATIO}" ]]; then
+  CMD+=(--positron-ratio "$POSITRON_RATIO")
+fi
+if [[ "${AUTO_MUNIT_RESUME}" == "1" ]]; then
+  CMD+=(--resume)
+fi
 
-  srun --exclusive -N1 -n1 -c1 "${CMD[@]}" \
-    > "/work/vmo703/igrmonty_logs/${LOG_STEM}.out" \
-    2> "/work/vmo703/igrmonty_logs/${LOG_STEM}.err" &
-done
+JOB_TAG="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
+LOG_STEM="row_${JOB_TAG}_${TASK_INDEX}_${ROW}${TASK_SUFFIX}"
 
-wait
-echo "[INFO] all rows finished"
+echo "[INFO] job=${SLURM_JOB_ID:-manual} array_task=${TASK_INDEX} csv=${CSV_PATH} total_rows=${TOTAL_ROWS} selected_tasks=${#TASK_LIST[@]} row=${ROW} positron_ratio=${POSITRON_RATIO:-auto} partitions=${SLURM_JOB_PARTITION:-unknown}"
+
+srun --exclusive -N1 -n1 -c "${SLURM_CPUS_PER_TASK:-1}" "${CMD[@]}" \
+  > "/work/vmo703/igrmonty_logs/${LOG_STEM}.out" \
+  2> "/work/vmo703/igrmonty_logs/${LOG_STEM}.err"
+
+echo "[INFO] task finished row=${ROW} positron_ratio=${POSITRON_RATIO:-auto}"
