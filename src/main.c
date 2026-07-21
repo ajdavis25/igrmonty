@@ -78,6 +78,7 @@ double positron_ratio = 0.0;
 
 // Define default, should be set by problem
 double biasTuning = 1.;
+double biasAbortRatio = BIAS_ABORT_RATIO_DEFAULT;
 
 int main(int argc, char *argv[])
 {
@@ -85,7 +86,6 @@ int main(int argc, char *argv[])
   fprintf(stderr, "grmonty. githash: %s\n", xstr(VERSION));
   fprintf(stderr, "notes: %s\n\n", xstr(NOTES));
   SET_RUN_STATUS(RUN_STATUS_RUNNING, "running", "startup");
-  fprintf(stderr, "bias guard threshold: effectiveness ratio <= %g\n", BIAS_ABORT_RATIO);
 
   double wtime = omp_get_wtime();
 
@@ -95,6 +95,17 @@ int main(int argc, char *argv[])
 
   // load parameters from command line
   load_par_from_argv(argc, argv, &params);
+  biasAbortRatio = params.biasAbortRatio;
+  if (!isfinite(biasAbortRatio) || biasAbortRatio <= 0.0)
+  {
+    SET_RUN_STATUS(RUN_STATUS_INIT_ERROR, "init_error", "invalid_bias_abort_ratio");
+    fprintf(stderr, "invalid bias_abort_ratio=%g (must be finite and > 0)\n",
+            biasAbortRatio);
+    fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
+            run_status_code, run_status, run_status_detail);
+    exit(EXIT_FAILURE);
+  }
+  fprintf(stderr, "bias guard threshold: effectiveness ratio <= %g\n", BIAS_ABORT_RATIO);
 
   // optional internal regression tests
   if (params.run_tests)
@@ -137,11 +148,21 @@ int main(int argc, char *argv[])
 
     time_t starttime = time(NULL);
 
-    double lowerratio  = params.targetRatio / M_SQRT2;
     double targetRatio = params.targetRatio;
-    double upperratio  = params.targetRatio * M_SQRT2;
+    if (!isfinite(targetRatio) || targetRatio <= 0.0)
+    {
+      SET_RUN_STATUS(RUN_STATUS_INIT_ERROR, "init_error", "invalid_target_ratio");
+      fprintf(stderr, "invalid ratio=%g (must be finite and > 0)\n", targetRatio);
+      fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
+              run_status_code, run_status, run_status_detail);
+      exit(EXIT_FAILURE);
+    }
+    double lowerratio  = targetRatio / M_SQRT2;
+    double upperratio  = targetRatio * M_SQRT2;
    
-    fprintf(stderr, "(target effectiveness ratio %g)...\n", targetRatio);
+    fprintf(stderr,
+            "(target effectiveness ratio %g, acceptable range %g-%g)...\n",
+            targetRatio, lowerratio, upperratio);
 
     int breakout_counter = 0;
 
@@ -204,31 +225,19 @@ int main(int argc, char *argv[])
         }
         fprintf(stderr, "something very wrong. attempting to increase ratio manually.\n");
         biasTuning *= 5.;
-        SET_RUN_STATUS(RUN_STATUS_INIT_ERROR, "init_error", "fitbias_zero_ratio_single");
-        fprintf(stderr, "run status: code=%d label=%s detail=%s\n",
-                run_status_code, run_status, run_status_detail);
-        exit(40);
+        lastscale = 5.;
+        continue;
       }
 
       // continue if good
-      if ( ratio >= 3 ) {
-        if (lastscale <= 1.5) {
-          break;
-        } else {
-          biasTuning /= 1.5;
-          lastscale /= 1.5;
-        }
-      } else if ( ratio >= 1 ) {
-        if (global_quit_flag) {
-          if (lastscale <= 3) {
-            break;
-          } else {
-            biasTuning /= 3.;
-            lastscale /= 3.;
-          }
-        } else {
-          break;
-        }
+      if (ratio > upperratio) {
+        double downscale = global_quit_flag ? 3. : 1.5;
+        biasTuning /= downscale;
+        lastscale /= downscale;
+        if (lastscale < 1.)
+          lastscale = 1.;
+      } else if ( ratio >= lowerratio ) {
+        break;
       } else {
         if (ratio < 1.e-10) {
           biasTuning *= 10.;

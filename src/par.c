@@ -14,6 +14,7 @@ void load_par_from_argv(int argc, char *argv[], Params *params)
   params->biasTuning = 1.;
   params->fitBias = 0;
   params->fitBiasNs = 10000.;
+  params->biasAbortRatio = 10.;
   params->targetRatio = M_SQRT2;
 
   params->TP_OVER_TE = 3.;
@@ -98,6 +99,8 @@ void load_par(const char *fname, Params *params)
     read_param(line, "bias", &(params->biasTuning), TYPE_DBL);
     read_param(line, "fit_bias", &(params->fitBias), TYPE_INT);
     read_param(line, "fit_bias_ns", &(params->fitBiasNs), TYPE_DBL);
+    read_param(line, "bias_abort_ratio", &(params->biasAbortRatio), TYPE_DBL);
+    read_param(line, "bias_abort_ratio_limit", &(params->biasAbortRatio), TYPE_DBL);
     read_param(line, "ratio", &(params->targetRatio), TYPE_DBL);
 
     // two point model

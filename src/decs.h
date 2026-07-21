@@ -24,7 +24,7 @@
 #define NUCUT (5.e13)
 #define GAMMACUT (1000.)
 #define SCATTERING_THETAE_MAX (1000.)
-#define BIAS_ABORT_RATIO (10.0)
+#define BIAS_ABORT_RATIO_DEFAULT (10.0)
 
 #define RUN_STATUS_UNKNOWN (0)
 #define RUN_STATUS_RUNNING (1)
@@ -164,9 +164,12 @@ extern double TP_OVER_TE;
 extern double positron_ratio;
 
 extern double max_tau_scatt, Ladv, dMact, bias_norm, biasTuning;
+extern double biasAbortRatio;
 extern int run_status_code;
 extern char run_status[RUN_STATUS_MAXLEN];
 extern char run_status_detail[RUN_STATUS_DETAIL_MAXLEN];
+
+#define BIAS_ABORT_RATIO (biasAbortRatio)
 
 #define SET_RUN_STATUS(_code, _label, _detail)                                    \
   do                                                                               \

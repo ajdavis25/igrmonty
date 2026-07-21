@@ -21,6 +21,7 @@ import math
 import re
 import subprocess
 import sys
+import time
 from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
@@ -94,6 +95,45 @@ TrialResult = namedtuple(
         "invalid_bias_count",
     ),
 )
+
+
+class TrialTimeoutError(RuntimeError):
+    """Raised when one GRMONTY trial exceeds the local wallclock guard."""
+
+
+class JobRuntimeBudgetExceeded(RuntimeError):
+    """Raised when the Slurm allocation is too close to expiry for another trial."""
+
+
+class BiasAbortError(RuntimeError):
+    """Raised when GRMONTY stops a trial through the scatter-ratio bias guard."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        trial_index: int,
+        munit: float,
+        log_path: Path,
+        detail: str,
+    ) -> None:
+        super().__init__(message)
+        self.trial_index = trial_index
+        self.munit = munit
+        self.log_path = log_path
+        self.detail = detail
+
+
+def format_seconds(seconds: float) -> str:
+    """Human-readable duration for log messages."""
+    seconds = max(0.0, float(seconds))
+    hours, rem = divmod(int(round(seconds)), 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 def cap_jump(prev_munit: float, new_munit: float, max_factor: float = 30.0) -> float:
@@ -602,8 +642,10 @@ def write_par_file(
     jet_beta_cut: Optional[float],
     jet_thetae: Optional[float],
     jet_ne_mult: Optional[float],
+    fit_bias: int,
     bias_ns: int,
     bias_start: float,
+    bias_abort_ratio: float,
     target_ratio: float,
 ) -> None:
     """write a GRMONTY parameter (.par) file for a single trial."""
@@ -615,9 +657,10 @@ def write_par_file(
         f"dump {dump_file}",
         f"spectrum {spectrum_path}",
         "",
-        "fit_bias 1",  # 0 off or 1 on
+        f"fit_bias {fit_bias}",  # 0 off or 1 on
         f"fit_bias_ns {bias_ns}",
         f"bias {bias_start}",
+        f"bias_abort_ratio {bias_abort_ratio}",
         f"ratio {target_ratio}",
         "",
         f"TP_OVER_TE {tp_over_te}",
@@ -668,6 +711,29 @@ def parse_munit_from_par(par_path: Path) -> float:
     raise RuntimeError(f"Could not find M_unit in {par_path}")
 
 
+def parse_grmonty_run_status(log_path: Path) -> Tuple[Optional[int], Optional[str], str]:
+    """Return the final GRMONTY run status tuple from a trial log, if present."""
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return None, None, ""
+
+    for line in reversed(lines):
+        match = re.search(
+            r"run status:\s+code=(?P<code>-?\d+)\s+"
+            r"label=(?P<label>\S+)\s+detail=(?P<detail>.*)$",
+            line,
+        )
+        if match is None:
+            continue
+        return (
+            int(match.group("code")),
+            match.group("label"),
+            match.group("detail").strip(),
+        )
+    return None, None, ""
+
+
 # tolerance helper
 class MunitBracketer:
     """simple wrapper for flux tolerance checks."""
@@ -703,12 +769,53 @@ class MunitTuner:
         self.trials: List[TrialResult] = []
         self.next_index: int = 1
         self.history_csv: Path = args.history_csv
+        self.started_at = time.monotonic()
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         OUT_DIR.mkdir(parents=True, exist_ok=True)
 
         if self.args.resume:
             self._load_existing_trials()
+
+    def _remaining_job_budget(self) -> Optional[float]:
+        """Return remaining local runtime budget, or None when disabled."""
+        if self.args.job_runtime_budget_sec <= 0:
+            return None
+        elapsed = time.monotonic() - self.started_at
+        return self.args.job_runtime_budget_sec - elapsed
+
+    def _ensure_time_for_new_trial(self) -> None:
+        """Avoid starting a trial that cannot reasonably finish before Slurm kills it."""
+        remaining = self._remaining_job_budget()
+        if remaining is None:
+            return
+
+        required = self.args.job_stop_margin_sec + self.args.min_trial_runtime_sec
+        if remaining <= required:
+            raise JobRuntimeBudgetExceeded(
+                "not enough allocation time remains to start another GRMONTY trial "
+                f"(remaining={format_seconds(remaining)}, "
+                f"required={format_seconds(required)})"
+            )
+
+    def _trial_timeout(self) -> Optional[float]:
+        """Combine the per-trial guard with the remaining job budget."""
+        timeout: Optional[float] = None
+        if self.args.trial_timeout_sec > 0:
+            timeout = float(self.args.trial_timeout_sec)
+
+        remaining = self._remaining_job_budget()
+        if remaining is not None:
+            allowed = remaining - self.args.job_stop_margin_sec
+            if allowed <= 0:
+                raise JobRuntimeBudgetExceeded(
+                    "job runtime budget is exhausted "
+                    f"(remaining={format_seconds(remaining)}, "
+                    f"stop_margin={format_seconds(self.args.job_stop_margin_sec)})"
+                )
+            timeout = allowed if timeout is None else min(timeout, allowed)
+
+        return timeout
 
     # resume support
     def _load_existing_trials(self) -> None:
@@ -943,6 +1050,9 @@ class MunitTuner:
                 f"[{self.args.min_munit:.3e}, {self.args.max_munit:.3e}]"
             )
 
+        self._ensure_time_for_new_trial()
+        timeout_sec = self._trial_timeout()
+
         idx = self.next_index
         self.next_index += 1
 
@@ -975,24 +1085,64 @@ class MunitTuner:
             jet_beta_cut=self.context["wjet_params"].get("jet_beta_cut"),
             jet_thetae=self.context["wjet_params"].get("jet_thetae"),
             jet_ne_mult=self.context["wjet_params"].get("jet_ne_mult"),
+            fit_bias=self.args.fit_bias,
             bias_ns=self.args.fit_bias_ns,
             bias_start=self.args.bias,
+            bias_abort_ratio=self.args.bias_abort_ratio,
             target_ratio=self.args.target_ratio,
         )
 
+        timeout_note = (
+            ""
+            if timeout_sec is None
+            else f" (local timeout {format_seconds(timeout_sec)})"
+        )
         print(
-            f"[trial {idx:02d}] running GRMONTY with M_unit={munit:.4e}...",
+            f"[trial {idx:02d}] running GRMONTY with M_unit={munit:.4e}"
+            f"{timeout_note}...",
             flush=True,
         )
 
-        with log_path.open("w") as log_fh:
-            # let CalledProcessError propagate to the caller.
-            subprocess.run(
-                [str(self.args.grmonty_bin), "-par", str(par_path)],
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                check=True,
-            )
+        try:
+            with log_path.open("w") as log_fh:
+                # let CalledProcessError propagate to the caller.
+                subprocess.run(
+                    [str(self.args.grmonty_bin), "-par", str(par_path)],
+                    stdout=log_fh,
+                    stderr=subprocess.STDOUT,
+                    check=True,
+                    timeout=timeout_sec,
+                )
+        except subprocess.TimeoutExpired as exc:
+            with log_path.open("a") as log_fh:
+                log_fh.write(
+                    "\n[auto_munit] trial wallclock guard fired after "
+                    f"{format_seconds(exc.timeout)}; terminating this trial.\n"
+                )
+            try:
+                spec_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise TrialTimeoutError(
+                f"trial #{idx:02d} exceeded local timeout "
+                f"{format_seconds(exc.timeout)}; log={log_path}"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            _status_code, status_label, status_detail = parse_grmonty_run_status(log_path)
+            if status_label == "abort_bias":
+                try:
+                    spec_path.unlink()
+                except FileNotFoundError:
+                    pass
+                raise BiasAbortError(
+                    f"trial #{idx:02d} hit GRMONTY bias guard "
+                    f"({status_detail}); log={log_path}",
+                    trial_index=idx,
+                    munit=munit,
+                    log_path=log_path,
+                    detail=status_detail,
+                ) from exc
+            raise
 
         flux, _ = measure_flux(spec_path, self.args.freq_target)
 
@@ -1071,7 +1221,20 @@ class MunitTuner:
 
         # 2) main iteration loop
         for _ in range(self.args.max_iters):
-            trial = self.run_trial(current_munit)
+            try:
+                trial = self.run_trial(current_munit)
+            except BiasAbortError as exc:
+                print(
+                    f"[solve] trial {exc.trial_index:02d} hit bias guard "
+                    f"({exc.detail}); backing off M_unit by factor "
+                    f"{self.args.bias_backoff_factor:.1f}.",
+                    flush=True,
+                )
+                current_munit = max(
+                    self.args.min_munit,
+                    exc.munit / self.args.bias_backoff_factor,
+                )
+                continue
 
             # if invalid bias events too large, treat as unstable and back off
             if trial.invalid_bias_count > self.args.invalid_bias_max:
@@ -1100,6 +1263,9 @@ class MunitTuner:
             current_munit = self._compute_next_munit(trial)
 
         # 3) if we reach here, no exact convergence: pick closest trial
+        if not self.trials:
+            raise RuntimeError("max iterations reached without a readable GRMONTY spectrum")
+
         best = min(
             self.trials,
             key=lambda t: abs(t.flux - self.bracketer.target_flux),
@@ -1243,6 +1409,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--fit-bias",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="Enable GRMONTY fit_bias tuning (1) or use fixed --bias (0).",
+    )
+    parser.add_argument(
         "--fit-bias-ns",
         type=int,
         default=50000,
@@ -1253,6 +1426,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=float,
         default=0.05,
         help="Initial bias value passed to GRMONTY.",
+    )
+    parser.add_argument(
+        "--bias-abort-ratio",
+        type=float,
+        default=10.0,
+        help="Abort GRMONTY when N_scatt/N_made exceeds this limit.",
     )
     parser.add_argument(
         "--target-ratio",
@@ -1288,6 +1467,30 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=int,
         default=8,
         help="Maximum number of new GRMONTY trials to run.",
+    )
+    parser.add_argument(
+        "--trial-timeout-sec",
+        type=float,
+        default=0.0,
+        help="Local wallclock limit for one GRMONTY trial; 0 disables it.",
+    )
+    parser.add_argument(
+        "--job-runtime-budget-sec",
+        type=float,
+        default=0.0,
+        help="Local runtime budget for this tuner process; 0 disables it.",
+    )
+    parser.add_argument(
+        "--job-stop-margin-sec",
+        type=float,
+        default=1800.0,
+        help="Stop before this much wallclock remains in the local job budget.",
+    )
+    parser.add_argument(
+        "--min-trial-runtime-sec",
+        type=float,
+        default=3600.0,
+        help="Do not start a new trial unless this much runtime remains before the stop margin.",
     )
 
     parser.add_argument(
@@ -1462,12 +1665,18 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
         try:
             best_trial = tuner.solve(init_munit)
+        except TrialTimeoutError as exc:
+            print(f"[error] {exc}", file=sys.stderr)
+            raise SystemExit(75) from exc
+        except JobRuntimeBudgetExceeded as exc:
+            print(f"[error] {exc}", file=sys.stderr)
+            raise SystemExit(75) from exc
         except subprocess.CalledProcessError as exc:
             print(
                 f"[error] GRMONTY failed (see log). Command: {exc.cmd}",
                 file=sys.stderr,
             )
-            raise
+            raise SystemExit(exc.returncode or 1) from exc
 
         tuner.cleanup(best_trial)
         print(
