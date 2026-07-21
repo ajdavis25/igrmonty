@@ -105,6 +105,19 @@ class JobRuntimeBudgetExceeded(RuntimeError):
     """Raised when the Slurm allocation is too close to expiry for another trial."""
 
 
+class MaxItersExceededError(RuntimeError):
+    """Raised when max_iters is exhausted without reaching flux tolerance.
+
+    Carries the closest trial so the caller can report it without treating
+    it as a genuine convergence (no history 'converged' flag, no promotion
+    to a suffix-free final filename via cleanup()).
+    """
+
+    def __init__(self, message: str, *, best: "TrialResult"):
+        super().__init__(message)
+        self.best = best
+
+
 class BiasAbortError(RuntimeError):
     """Raised when GRMONTY stops a trial through the scatter-ratio bias guard."""
 
@@ -1271,14 +1284,20 @@ class MunitTuner:
             key=lambda t: abs(t.flux - self.bracketer.target_flux),
         )
         print(
-            "[solve] max iterations reached; using closest flux encountered:\n"
+            "[solve] max iterations reached; NOT converged. closest flux encountered:\n"
             f"        trial #{best.index:02d} M_unit={best.munit:.4e}, "
-            f"flux={best.flux:.4f} Jy",
+            f"flux={best.flux:.4f} Jy (target {self.bracketer.target_flux:.4f} Jy)",
             flush=True,
         )
-        # mark best as "converged" in the history file (best-so-far)
-        self._append_history(best, converged=True, is_resumed=False)
-        return best
+        # record accurately as NOT converged; do not promote this trial to a
+        # suffix-free final name (see MaxItersExceededError below)
+        self._append_history(best, converged=False, is_resumed=False)
+        raise MaxItersExceededError(
+            f"max_iters={self.args.max_iters} exhausted without reaching tolerance "
+            f"(best trial #{best.index:02d}, flux={best.flux:.4f} Jy, "
+            f"target {self.bracketer.target_flux:.4f} Jy)",
+            best=best,
+        )
 
     # cleanup / finalization
     def cleanup(self, best: TrialResult) -> None:
@@ -1671,6 +1690,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         except JobRuntimeBudgetExceeded as exc:
             print(f"[error] {exc}", file=sys.stderr)
             raise SystemExit(75) from exc
+        except MaxItersExceededError as exc:
+            print(f"[error] {exc}", file=sys.stderr)
+            print(
+                f"[error] trial #{exc.best.index:02d} left under its trial name "
+                "(NOT promoted to final); rerun with --resume to keep tuning.",
+                file=sys.stderr,
+            )
+            raise SystemExit(76) from exc
         except subprocess.CalledProcessError as exc:
             print(
                 f"[error] GRMONTY failed (see log). Command: {exc.cmd}",
