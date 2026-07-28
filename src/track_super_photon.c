@@ -317,6 +317,10 @@ void track_super_photon(struct of_photon *ph)
       debug_dump_invalid_nu_context("init", ph, nstep, Gcov, Ucon, Ucov, Bcon, Bcov,
                                     Ne, Thetae, B, nu, NULL, NULL, NULL, 0.0, ph->E0s);
 #endif
+#pragma omp atomic
+      N_track_reject_nu++;
+#pragma omp atomic
+      W_track_reject_nu += ph->w;
       ph->w = 0.0;
       return;
     }
@@ -405,6 +409,10 @@ void track_super_photon(struct of_photon *ph)
               fprintf(stderr, "Xi, %g %g %g %g\n", Xi[0], Xi[1], Xi[2], Xi[3]);
               fprintf(stderr, "Ki, %g %g %g %g\n", Ki[0], Ki[1], Ki[2], Ki[3]);
               fprintf(stderr, "dKi, %g %g %g %g\n", dKi[0], dKi[1], dKi[2], dKi[3]);
+#pragma omp atomic
+              N_track_reject_nu++;
+#pragma omp atomic
+              W_track_reject_nu += ph->w;
 #ifdef DEBUG_WJET
               fprintf(stderr, "DEBUG_WJET track_super_photon: dropping photon due to invalid nu\n");
               debug_dump_invalid_nu_context("step", ph, nstep, Gcov, Ucon, Ucov, Bcon, Bcov,
@@ -498,13 +506,10 @@ void track_super_photon(struct of_photon *ph)
           // Actually about to scatter photon
           if (Ne > 0.)
           {
-            if (!isfinite(bias) || bias < 1.0)
-            {
-#pragma omp atomic
-              ++invalid_bias;
-              bias = 1.0;
-              php.w = ph->w;
-            }
+            // bias is already guaranteed >= 1.0 here: sanitize_bias() at the top of
+            // this function forces that, and bias is never reassigned between there
+            // and here, so the old "bias < 1.0" recovery branch could never fire. See
+            // docs/audits/2026-07-23_jet_electron_temperature_audit.md, Finding L2.
             scatter_super_photon(ph, &php, Ne, Thetae, B, Ucon, Bcon, Gcov);
 
             if (ph->w < 1.e-100)

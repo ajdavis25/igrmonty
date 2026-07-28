@@ -4,7 +4,7 @@
 #define LNUMIN log(NUMIN)
 #define LNUMAX log(NUMAX)
 #define DLNU ((LNUMAX - LNUMIN) / N_ESAMP)
-#define THETAE_MIN 1e-3 // 1e-3 for R-Beta | 0.3 for Crit-Beta
+#define THETAE_MIN 1e-3 // flat floor for all electron models (R-Beta, Crit-Beta, jet variants); matches IPOLE's "secret floor"
 #define WEIGHT_MIN (1.e28)
 
 #define SYNCHROTRON (1)

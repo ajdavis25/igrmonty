@@ -9,6 +9,19 @@ static const int SAMPLE_KLEIN_NISHINA_MAX_ATTEMPTS = 10000000;
 static const int SAMPLE_ELECTRON_MAX_ATTEMPTS = 10000000;
 static const int SAMPLE_BETA_DIST_MAX_ATTEMPTS = 10000000;
 
+// Finding D6 (docs/2026-07-23_jet_implementation_changes.md sec 13-14): the legacy
+// flux-factor rejection sampler in sample_electron_distr_p() has acceptance
+// ~P(K<=K0_MAX)*sigma_KN(K)/sigma_T, which collapses to ~5e-8 in the regime the
+// post-H1-fix jet supplement creates (Thetae at the THETAE_HARD_MAX=1e3 cap against
+// multiply-scattered photons, k0 ~ 1e3) -- observed exhausting all 10M attempts and
+// killing the run (SLURM job 778136). The analytic deep-KN sampler below is used for
+// Thetae >= this threshold (chosen 2026-07-26, user decision on D6) and as a
+// last-resort fallback when the legacy loop exhausts its attempt budget.
+static const double DEEP_KN_SAMPLER_THETAE_MIN = 100.;
+// Truncation of the Gamma(2,Thetae) proposal; Maxwell-Juttner tail mass above
+// 30*Thetae is ~3e-12, negligible against Monte Carlo statistics.
+static const double DEEP_KN_GAMMA_CAP_FACTOR = 30.;
+
 static void fail_sampling(const char *detail)
 {
 	SET_RUN_STATUS(RUN_STATUS_SAMPLING_ERROR, "sampling_error", detail);
@@ -214,6 +227,43 @@ double sample_klein_nishina(double k0)
 	double k0pmin, k0pmax, k0p_tent, x1;
 	int n = 0;
 
+	// Finding D6: composition-rejection sampler (Butcher & Messel 1960, the
+	// standard EGS/Geant technique) for the deep-KN regime. The flat-box rejection
+	// below has limiting efficiency log(2 k0)/(2 k0) (its own comment) -- ~1e5
+	// wasted draws per event at the K0_MAX-clamped energies the post-H1-fix jet
+	// supplement produces. This branch is O(1)-efficient (~40%) at any k0 and
+	// samples the IDENTICAL target: with eps = k0p/k0 and ch = 1 + 1/k0 - 1/k0p,
+	//     (1/eps + eps) * (1 - eps*sin2th/(1+eps^2))  ==  k0/k0p + k0p/k0 - 1 + ch^2,
+	// i.e. exactly klein_nishina(k0, k0p) up to its constant 1/k0^2 factor.
+	// Gated to k0 >= 1 so every previously-validated low-energy path is untouched
+	// (at k0 < 1 the legacy box sampler's efficiency is >~ 35%). Prototype
+	// validation (vs legacy at k0 = 0.5/1/10, |z| <= 1.4 at N=200k) recorded in
+	// docs/2026-07-23_jet_implementation_changes.md sec 14.
+	if (k0 >= 1.) {
+		double eps0 = 1. / (1. + 2. * k0);
+		double alph1 = log(1. / eps0);
+		double alph2 = 0.5 * (1. - eps0 * eps0);
+		double eps, t, s2;
+		do {
+			if (monty_rand() * (alph1 + alph2) < alph1) {
+				eps = eps0 * exp(alph1 * monty_rand()); // density prop. to 1/eps
+			} else {
+				eps = sqrt(eps0 * eps0 + (1. - eps0 * eps0) * monty_rand()); // prop. to eps
+			}
+			t = (1. - eps) / (k0 * eps); // = 1 - cos(theta) from the Compton relation
+			s2 = t * (2. - t);           // = sin^2(theta)
+			n++;
+			if (n > SAMPLE_KLEIN_NISHINA_MAX_ATTEMPTS) {
+				char detail[RUN_STATUS_DETAIL_MAXLEN];
+				snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+				         "sample_klein_nishina_bm_stalled k0=%g attempts=%d",
+				         k0, n);
+				fail_sampling(detail);
+			}
+		} while (monty_rand() >= 1. - eps * s2 / (1. + eps * eps));
+		return eps * k0;
+	}
+
 	// a low efficiency sampling algorithm, particularly for large k0;
 	// limiting efficiency is log(2 k0)/(2 k0)
 	k0pmin = k0 / (1. + 2. * k0);	 // at theta = Pi
@@ -260,12 +310,88 @@ double klein_nishina(double a, double ap)
 	return (kn);
 }
 
-/* 
+/*
 
 	sample electron distribution to find which electron was
 	scattered.
 
 */
+
+// Klein-Nishina total cross section / Thomson. Exactly the expression that lived
+// inline in sample_electron_distr_p's rejection loop; factored out so the deep-KN
+// sampler and the legacy loop share one definition.
+static double sigma_kn_over_thomson(double K)
+{
+	if (K < 1.e-3)
+		return 1. - 2. * K;
+	return (3. / (4. * K * K)) *
+	       (2. + K * K * (1. + K) / ((1. + 2. * K) * (1. + 2. * K)) +
+	        (K * K - 2. * K - 2.) / (2. * K) * log(1. + 2. * K));
+}
+
+// Finding D6: analytic deep-KN electron sampler (Maxwell-Juttner only).
+//
+// Samples (gamma_e, mu) from the SAME target the legacy loop samples:
+//     MJ(gamma) * (1 - beta*mu)/2 * sigma_KN(K)/sigma_T,   K = gamma*(1-beta*mu)*k0,
+// truncated to K <= K0_MAX (identical to the legacy loop's `K > K0_MAX -> continue`).
+//
+// Change of proposal: gamma ~ Gamma(2, Thetae) (density prop. to gamma*e^{-gamma/Th},
+// sampled exactly as -Thetae*log(u1*u2)) and mu ~ Uniform(-1,1). Writing the flux
+// factor as (1 - beta*mu) = K/(gamma*k0), the exact acceptance ratio collapses to
+//     A = beta * [K * sigma_KN(K)/sigma_T] / G_sup
+// -- the flux factor cancels against the 1/K falloff of the deep-KN cross section,
+// which is precisely why the legacy proposal (which FAVORS head-on, high-K draws)
+// dies in this regime. g(K) = K*sigma_KN(K)/sigma_T is monotone increasing (verified
+// numerically over K in [1e-10, 1e8]), so G_sup = 1.02 * g(K_cap) with
+// K_cap = min(2*gamma_cap*k0, K0_MAX) majorizes it with a 2% safety margin.
+//
+// Efficiency is O(1) at any K: ~10% at the exact regime that exhausted the legacy
+// sampler (Thetae=1e3, k0~2e3, job 778136) where legacy acceptance was ~5e-8, and
+// a few percent in the Thomson limit (where it exactly reduces to the flux-factor
+// target). Prototype validation (distributional equivalence vs legacy at Thetae=100
+// across k0 = 1e-8 / 0.1 / 3.0, all |z| < 2.6 at N=150k) recorded in
+// docs/2026-07-23_jet_implementation_changes.md sec 14.
+static void sample_electron_mu_deep_kn(double k0_local, double Thetae,
+                                       double *gamma_out, double *beta_out,
+                                       double *mu_out)
+{
+	double gamma_cap = DEEP_KN_GAMMA_CAP_FACTOR * Thetae;
+	double K_cap = 2. * gamma_cap * k0_local;
+	if (K_cap > K0_MAX)
+		K_cap = K0_MAX;
+	double G_sup = 1.02 * K_cap * sigma_kn_over_thomson(K_cap);
+	int attempts = 0;
+
+	while (1) {
+		if (attempts > SAMPLE_ELECTRON_MAX_ATTEMPTS) {
+			char detail[RUN_STATUS_DETAIL_MAXLEN];
+			snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
+			         "sample_electron_deep_kn_stalled Thetae=%g k0=%g attempts=%d",
+			         Thetae, k0_local, attempts);
+			fail_sampling(detail);
+		}
+		attempts++;
+
+		double u1 = monty_rand();
+		double u2 = monty_rand();
+		if (!(u1 > 0.) || !(u2 > 0.))
+			continue;
+		double ge = -Thetae * log(u1 * u2); // Gamma(2, Thetae)
+		if (ge <= 1. || ge >= gamma_cap)
+			continue;
+		double be = sqrt(1. - 1. / (ge * ge));
+		double mu = 2. * monty_rand() - 1.;
+		double K = ge * (1. - be * mu) * k0_local;
+		if (!(K > 0.0) || !isfinite(K) || K > K0_MAX)
+			continue;
+		if (monty_rand() * G_sup < be * K * sigma_kn_over_thomson(K)) {
+			*gamma_out = ge;
+			*beta_out = be;
+			*mu_out = mu;
+			return;
+		}
+	}
+}
 
 void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 {
@@ -281,13 +407,38 @@ void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 		k0_local = 1.e-30;
 	}
 
+	// Finding D6: route hot zones to the analytic deep-KN sampler. Threshold per
+	// the 2026-07-26 decision; Maxwell-Juttner builds only (the analytic proposal
+	// is MJ-specific -- kappa/power-law builds keep the legacy path unchanged).
+	int use_deep_kn = 0;
+#if MODEL_EDF == EDF_MAXWELL_JUTTNER
+	if (Thetae >= DEEP_KN_SAMPLER_THETAE_MIN)
+		use_deep_kn = 1;
+#endif
+
+	if (use_deep_kn) {
+		sample_electron_mu_deep_kn(k0_local, Thetae, &gamma_e, &beta_e, &mu);
+	} else {
 	while (1) {
 		if (sample_cnt > SAMPLE_ELECTRON_MAX_ATTEMPTS) {
+#if MODEL_EDF == EDF_MAXWELL_JUTTNER
+			// Finding D6: this used to fail_sampling() -> exit(-1), killing the
+			// entire run because one photon was un-sampleable. Fall back to the
+			// analytic sampler instead -- it is efficient precisely in the regime
+			// that exhausts this loop.
+			fprintf(stderr,
+			        "sample_electron: legacy sampler exhausted %d attempts "
+			        "(Thetae=%g k0=%g); using deep-KN analytic sampler\n",
+			        sample_cnt, Thetae, k0_local);
+			sample_electron_mu_deep_kn(k0_local, Thetae, &gamma_e, &beta_e, &mu);
+			break;
+#else
 			char detail[RUN_STATUS_DETAIL_MAXLEN];
 			snprintf(detail, RUN_STATUS_DETAIL_MAXLEN,
 			         "sample_electron_stalled Thetae=%g mu=%g gamma_e=%g K=%g sigma_KN=%g x1=%g attempts=%d",
 			         Thetae, mu, gamma_e, K, sigma_KN, x1, sample_cnt);
 			fail_sampling(detail);
+#endif
 		}
 
 		sample_cnt++;
@@ -314,21 +465,13 @@ void sample_electron_distr_p(double k[4], double p[4], double Thetae)
 			continue;
 		}
 
-		// Avoid problems at small K
-		if (K < 1.e-3) {
-			sigma_KN = 1. - 2. * K;
-		} else {
-
-			// Klein-Nishina cross-section / Thomson
-			sigma_KN = (3. / (4. * K * K)) * 
-                 (2. + K * K * (1. + K) / ((1. + 2. * K) * (1. + 2. * K)) +
-						   (K * K - 2. * K - 2.) / (2. * K) * log(1. + 2. * K));
-		}
+		sigma_KN = sigma_kn_over_thomson(K);
 
 		x1 = monty_rand();
 
 		if (x1 < sigma_KN)
 			break;
+	}
 	}
 
 	// first unit vector for coordinate system 

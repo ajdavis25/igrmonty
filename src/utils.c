@@ -121,7 +121,10 @@ void reset_state(int recph)
   N_init_reject_x = 0;
   N_init_reject_metric = 0;
   N_init_reject_nu = 0;
-}      
+  N_track_reject_nu = 0;
+  W_track_reject_nu = 0.0;
+  W_superph_made = 0.0;
+}
 
 void get_fluid_zone(int i, int j, int k, double *Ne, double *Thetae, double *B,
         double Ucon[NDIM], double Bcon[NDIM]);
@@ -347,7 +350,21 @@ void init_zone(int i, int j, int k, double *nz, double *dnmax)
       if (dn == 0) {
         zwgt[m] = 0.;
       } else {
-        zwgt[m] = log( exp(wgt[m]) * dn * DLNU / ninterp * N_ESAMP );
+        double log_arg = exp(wgt[m]) * dn * DLNU / ninterp * N_ESAMP;
+        // D5 root-cause diagnostic: log() of a non-positive argument is -inf (if
+        // log_arg==0, already handled by zone_linear_interp_weight's isinf check)
+        // or NaN (if log_arg<0, e.g. from a negative int_jnu -- NOT previously
+        // caught anywhere, see Finding D5). Gated behind an env var; temporary.
+        if (getenv("GRMONTY_DEBUG_D5") != NULL && !(log_arg > 0.0))
+        {
+          fprintf(stderr,
+                  "GRMONTY_DEBUG_D5 init_zone: non-positive log_arg=%.15e at m=%d "
+                  "nu=%.15e dn=%.15e wgt[m]=%.15e ninterp=%.15e Ne=%.15e Thetae=%.15e "
+                  "Bmag=%.15e int_jnu=%.15e\n",
+                  log_arg, m, nu, dn, wgt[m], ninterp, Ne, Thetae, Bmag,
+                  int_jnu(Ne, Thetae, Bmag, nu));
+        }
+        zwgt[m] = log( log_arg );
       }
     } else {
       zwgt[m] = 0.;
@@ -495,13 +512,19 @@ double zone_linear_interp_weight(double nu) {
   // intel compiler has issues if zwgt[i] = -inf
   // and returns exp( EXPRESSION ) = -nan, so we
   // manually check here.
-  if ( isinf(zwgt[i]) || isinf(zwgt[i+1]) ) return 0.;
-
-  return exp( (1. - di)*zwgt[i] + di*zwgt[i + 1] );
+  //
+  // D5 root-cause fix: this used to `return` the exp(...) expression directly, one
+  // line above an isnan() check that could therefore never run (dead code -- the
+  // function had already returned). That check only ever covered -inf inputs, not
+  // NaN ones. If zwgt[i]/zwgt[i+1] is NaN (see init_zone()'s log(negative) case,
+  // Finding D5), that NaN was returned as the photon's weight with nothing
+  // downstream flagging it as invalid. Now checks isnan on the inputs and isfinite
+  // on the result. See docs/2026-07-23_jet_implementation_changes.md sec 9/10.
+  if ( isinf(zwgt[i]) || isinf(zwgt[i+1]) || isnan(zwgt[i]) || isnan(zwgt[i+1]) ) return 0.;
 
   double wgt = exp( (1. - di)*zwgt[i] + di*zwgt[i + 1] );
 
-  if ( isnan(wgt) ) return 0.;
+  if ( !isfinite(wgt) ) return 0.;
   return wgt;
 }
 
@@ -753,6 +776,17 @@ void summary(FILE *file, const char *prefix)
               "%sinit rejects total=%lld state=%lld xdomain=%lld metric=%lld nu=%lld\n",
               prefix, N_init_reject_total, N_init_reject_state,
               N_init_reject_x, N_init_reject_metric, N_init_reject_nu);
+    }
+    if (prefix && N_track_reject_nu > 0)
+    {
+      double reject_nu_weight_frac = (W_superph_made > 0.0)
+                                          ? (W_track_reject_nu / W_superph_made)
+                                          : 0.0;
+      fprintf(stderr,
+              "%strack isnan-nu rejects: count=%lld weight_dropped=%g weight_made=%g "
+              "weight_frac=%g\n",
+              prefix, N_track_reject_nu, W_track_reject_nu, W_superph_made,
+              reject_nu_weight_frac);
     }
     prev_superph_made = N_superph_made;
     prev_nscatt = N_scatt;

@@ -133,6 +133,14 @@ extern long long N_init_reject_x;
 extern long long N_init_reject_metric;
 extern long long N_init_reject_nu;
 
+/* Finding H2: mid-flight (as opposed to init-time) isnan-nu drops in
+ * track_super_photon(), and the photon weight lost to them. Jet branches hit
+ * this substantially more than non-jet branches -- see
+ * docs/audits/2026-07-23_jet_electron_temperature_audit.md, Finding H2. */
+extern long long N_track_reject_nu;
+extern double W_track_reject_nu;
+extern double W_superph_made;
+
 /* HARM model globals */
 extern struct of_geom **geom;
 extern struct of_tetrads ***tetrads;

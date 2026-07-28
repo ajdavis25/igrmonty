@@ -123,7 +123,13 @@ double jnu_ratio_brems(double nu, double Ne, double Thetae, double B, double the
   brems = jnu_bremss(nu, Ne, Thetae);
 #endif // BREMSSTRAHLUNG
 
-  if (synch + brems == 0)
+  // D5 root-cause fix: `== 0` does not catch a NaN sum (any comparison with NaN is
+  // false in IEEE754), so a NaN synch/brems term used to sail through this guard and
+  // return NaN as the ratio. jnu_thermal() itself is now fixed not to produce NaN
+  // (see above), but keeping this broadened as a second line of defense for the
+  // kappa/powerlaw EDF paths, which weren't specifically audited here. See
+  // docs/2026-07-23_jet_implementation_changes.md sec 9/10 (Finding D5).
+  if (!isfinite(synch + brems) || synch + brems == 0)
     return 0.;
 
   return brems / (synch + brems);
@@ -285,6 +291,24 @@ static double jnu_thermal(double nu, double Ne, double Thetae, double B,
 
   K2 = K2_eval(Thetae);
 
+  // D5 root-cause fix: for Thetae close to (but above) THETAE_MIN, K2_eval's
+  // tabulated/asymptotic K2 can underflow to exactly 0 (this formula is documented
+  // above as "good for Thetae > 1" -- Crit-Beta's exp(-beta/beta_crit) suppression
+  // pushes many zones down near THETAE_MIN far more often than R-Beta's rational
+  // trat formula does, so this regime is reached in practice). Dividing by K2=0
+  // below gives +-inf, and inf * exp(-xp1) is 0*inf == NaN whenever the same
+  // low-Thetae/high-x regime also makes exp(-xp1) underflow to exactly 0 -- both
+  // conditions co-occur here, since both are driven by the same tiny Thetae. That
+  // NaN then defeats jnu_ratio_brems's `synch+brems==0` guard (comparisons with NaN
+  // are always false in IEEE754) and silently poisons the recorded spectrum. Treat
+  // K2<=0 the same as the other "outside this formula's applicability" cases in
+  // this function, which already return 0 rather than compute through them. See
+  // docs/2026-07-23_jet_implementation_changes.md sec 9/10 (Finding D5).
+  if (!(K2 > 0.))
+  {
+    return 0.;
+  }
+
   nuc = EE * B / (2. * M_PI * ME * CL);
   sth = sin(theta);
   nus = (2. / 9.) * nuc * Thetae * Thetae * sth;
@@ -300,6 +324,11 @@ static double jnu_thermal(double nu, double Ne, double Thetae, double B,
   f = xx * xx;
   j = (M_SQRT2 * M_PI * EE * EE * Ne_lep * nus / (3. * CL * K2)) * f *
       exp(-xp1);
+
+  if (!isfinite(j))
+  {
+    return 0.;
+  }
 
   return j;
 }

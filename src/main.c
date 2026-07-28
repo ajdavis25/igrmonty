@@ -57,6 +57,9 @@ long long N_init_reject_state;
 long long N_init_reject_x;
 long long N_init_reject_metric;
 long long N_init_reject_nu;
+long long N_track_reject_nu;
+double W_track_reject_nu;
+double W_superph_made;
 int run_status_code = RUN_STATUS_UNKNOWN;
 char run_status[RUN_STATUS_MAXLEN] = "unknown";
 char run_status_detail[RUN_STATUS_DETAIL_MAXLEN] = "";
@@ -276,12 +279,15 @@ int main(int argc, char *argv[])
       if (quit_flag)
         break;
       
-      // push them around 
+      // push them around
+      double w_made = ph.w;
       track_super_photon(&ph);
 
       // step
       #pragma omp atomic
       N_superph_made += 1;
+      #pragma omp atomic
+      W_superph_made += w_made;
 
       // give interim reports on rates
       if ((int)N_superph_made % 100000 == 0 && N_superph_made > 0)

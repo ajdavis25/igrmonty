@@ -147,9 +147,21 @@ void record_super_photon(struct of_photon *ph)
   double lE, dx2;
   int iE, ix2, ic;
 
-  if (isnan(ph->w) || isnan(ph->E))
+  if (!isfinite(ph->w) || !isfinite(ph->E) || !isfinite(ph->ratio_brems) ||
+      !isfinite(ph->tau_abs) || !isfinite(ph->tau_scatt) || !isfinite(ph->X1i) ||
+      !isfinite(ph->X2i) || !isfinite(ph->X[3]) || !isfinite(ph->ne0) ||
+      !isfinite(ph->b0) || !isfinite(ph->thetae0))
   {
-    fprintf(stderr, "record isnan: %g %g\n", ph->w, ph->E);
+    // D5 root-cause: was `isnan(...)` only, which does not catch +-inf. A photon with
+    // infinite (not NaN) w/E would sail through this check, then poison spect[]'s
+    // running sums the moment it's added (inf + finite = inf; a later inf + -inf = NaN
+    // in report_spectrum's dL total) -- see
+    // docs/2026-07-23_jet_implementation_changes.md sec 9/10 (Finding D5).
+    fprintf(stderr,
+            "record non-finite: w=%.15e E=%.15e nscatt=%d ratio_brems=%.15e "
+            "thetae0=%.15e ne0=%.15e b0=%.15e tau_abs=%.15e tau_scatt=%.15e\n",
+            ph->w, ph->E, ph->nscatt, ph->ratio_brems,
+            ph->thetae0, ph->ne0, ph->b0, ph->tau_abs, ph->tau_scatt);
     return;
   }
 
@@ -549,7 +561,12 @@ double thetae_func(double uu, double rho, double B, double kel)
   const double rho_floor = 1.e-30;
   const double uu_floor = 1.e-30;
   const double rb_floor = 1.e-3;
-  const double crit_floor = 3.e-2;
+  // Matches IPOLE's flat, model-independent floor (ipole model/iharm/model.c,
+  // "Secret floor", fmax(..., 1.e-3) applied regardless of electronModel).
+  // Previously 3.e-2 here, which both diverged from IPOLE and disagreed with the
+  // THETAE_MIN comment in model.h -- see
+  // docs/audits/2026-07-23_jet_electron_temperature_audit.md, Finding M1.
+  const double crit_floor = 1.e-3;
 
   double safe_rho = clamp_positive(rho, rho_floor);
   double safe_uu = clamp_positive(uu, uu_floor);
@@ -670,6 +687,16 @@ double thetae_func(double uu, double rho, double B, double kel)
     }
   }
 
+  // Two independent, deliberately separate jet mechanisms exist here:
+  //   (1) in_jet / jet_sigma_cut / jet_beta_cut / jet_thetae: a hard Thetae override.
+  //       This is a GRMONTY-only extension with no IPOLE equivalent.
+  //   (2) in_high_sigma_region / sigma_transition / constant_beta_e0: an additive
+  //       supplement on top of the base disk model. This ports IPOLE's
+  //       "above sigma_transition, ADD the constant_beta_e0 temperature" rule
+  //       (ipole model/iharm/model.c, electronModel != 5 branch).
+  // Precedence is intentional: the hard override (1) wins whenever both would
+  // otherwise apply, so the two are never combined/double-counted. Do not reorder
+  // this else-if without re-checking that intent.
   if (in_jet && jet_thetae > 0.0)
   {
     double thetae_upper = fmin(Thetae_max, THETAE_HARD_MAX);
@@ -1344,6 +1371,115 @@ void init_data(int argc, char *argv[], Params *params)
   fprintf(stderr, "dMact: %g, Ladv: %g\n", dMact, Ladv);
 
   init_tetrads();
+
+  // P2.2 regression hook: dump every zone's Thetae to a flat binary file (row-major
+  // i,j,k, N1*N2*N3 doubles) for comparison against the baseline tree's field.
+  // Temporary; gated behind an env var, no-op for normal runs.
+  {
+    const char *dumpf = getenv("GRMONTY_DEBUG_DUMP_THETAE");
+    if (dumpf != NULL)
+    {
+      FILE *df = fopen(dumpf, "wb");
+      if (df != NULL)
+      {
+        for (int di = 0; di < N1; di++)
+        {
+          for (int dj = 0; dj < N2; dj++)
+          {
+            for (int dk = 0; dk < N3; dk++)
+            {
+              double Ne, Thetae, Bmag, Ucon[NDIM], Bcon[NDIM];
+              get_fluid_zone(di, dj, dk, &Ne, &Thetae, &Bmag, Ucon, Bcon);
+              fwrite(&Thetae, sizeof(double), 1, df);
+            }
+          }
+        }
+        fclose(df);
+        fprintf(stderr, "GRMONTY_DEBUG_DUMP_THETAE wrote %d x %d x %d doubles to %s\n",
+                N1, N2, N3, dumpf);
+      }
+      exit(0);
+    }
+  }
+
+  // P2.5 follow-up: scan every zone for a non-finite Thetae/Ne/B and report the first
+  // few offenders, so a NaN found downstream (e.g. in report_spectrum's dL sum) can be
+  // traced back to its actual zone instead of guessed at from reading the formula.
+  // Gated behind an env var; no-op for normal runs.
+  {
+    const char *dbgscan = getenv("GRMONTY_DEBUG_SCAN");
+    if (dbgscan != NULL)
+    {
+      long total = 0, bad = 0;
+      int reported = 0;
+      const int max_report = 20;
+      for (int di = 0; di < N1; di++)
+      {
+        for (int dj = 0; dj < N2; dj++)
+        {
+          for (int dk = 0; dk < N3; dk++)
+          {
+            total++;
+            double Ne, Thetae, Bmag, Ucon[NDIM], Bcon[NDIM];
+            get_fluid_zone(di, dj, dk, &Ne, &Thetae, &Bmag, Ucon, Bcon);
+            if (!isfinite(Ne) || !isfinite(Thetae) || !isfinite(Bmag))
+            {
+              bad++;
+              if (reported < max_report)
+              {
+                double rho = p[KRHO][di][dj][dk];
+                double uu = p[UU][di][dj][dk];
+                double kel = p[KEL][di][dj][dk];
+                fprintf(stderr,
+                        "GRMONTY_DEBUG_SCAN bad zone i=%d j=%d k=%d: rho=%.15e uu=%.15e "
+                        "kel=%.15e Ne=%.15e Thetae=%.15e B=%.15e\n",
+                        di, dj, dk, rho, uu, kel, Ne, Thetae, Bmag);
+                reported++;
+              }
+            }
+          }
+        }
+      }
+      fprintf(stderr, "GRMONTY_DEBUG_SCAN done: total=%ld bad=%ld (with_electrons=%d)\n",
+              total, bad, with_electrons);
+      exit(0);
+    }
+  }
+
+  // P2.1 validation hook: report one zone's fluid/electron quantities and exit, for
+  // cross-checking against an independent recomputation of the audited Thetae formula.
+  // Gated behind an env var so it's a no-op for normal runs. See
+  // docs/2026-07-23_jet_implementation_changes.md sec 9 (P2.1).
+  {
+    const char *dbgzone = getenv("GRMONTY_DEBUG_ZONE");
+    if (dbgzone != NULL)
+    {
+      int di, dj, dk;
+      if (sscanf(dbgzone, "%d,%d,%d", &di, &dj, &dk) == 3 &&
+          di >= 0 && di < N1 && dj >= 0 && dj < N2 && dk >= 0 && dk < N3)
+      {
+        double Ne, Thetae, Bmag, Ucon[NDIM], Bcon[NDIM];
+        get_fluid_zone(di, dj, dk, &Ne, &Thetae, &Bmag, Ucon, Bcon);
+        double rho = p[KRHO][di][dj][dk];
+        double uu = p[UU][di][dj][dk];
+        double B_code = Bmag / B_unit;
+        double sigma = (B_code * B_code) / rho;
+        double beta = uu * (gam - 1.) / (0.5 * B_code * B_code);
+        fprintf(stderr,
+                "GRMONTY_DEBUG_ZONE i=%d j=%d k=%d: rho_code=%.15e uu_code=%.15e "
+                "B_code=%.15e Ne_cgs=%.15e Thetae=%.15e B_G=%.15e sigma=%.15e beta=%.15e\n",
+                di, dj, dk, rho, uu, B_code, Ne, Thetae, Bmag, sigma, beta);
+      }
+      else
+      {
+        fprintf(stderr,
+                "GRMONTY_DEBUG_ZONE: could not parse '%s' as 'i,j,k' in range "
+                "[0,%d)x[0,%d)x[0,%d)\n",
+                dbgzone, N1, N2, N3);
+      }
+      exit(0);
+    }
+  }
 }
 
 //////////////////////////////////// OUTPUT ////////////////////////////////////
@@ -1466,6 +1602,19 @@ void report_spectrum(int N_superph_made, Params *params)
     }
   }
   h5io_add_data_int(fid, "/params/electrons/type", with_electrons);
+
+  // Finding H2: isnan-nu photon drops and the weight lost to them. Jet branches hit
+  // this substantially more than non-jet branches -- see
+  // docs/audits/2026-07-23_jet_electron_temperature_audit.md, Finding H2.
+  // Stored as dbl (not int) since counts are accumulated as long long/double in the
+  // run and there is no h5io_add_data_lng helper.
+  h5io_add_group(fid, "/params/diagnostics");
+  h5io_add_data_dbl(fid, "/params/diagnostics/N_init_reject_nu", (double) N_init_reject_nu);
+  h5io_add_data_dbl(fid, "/params/diagnostics/N_track_reject_nu", (double) N_track_reject_nu);
+  h5io_add_data_dbl(fid, "/params/diagnostics/W_track_reject_nu", W_track_reject_nu);
+  h5io_add_data_dbl(fid, "/params/diagnostics/W_superph_made", W_superph_made);
+  h5io_add_data_dbl(fid, "/params/diagnostics/track_reject_nu_weight_frac",
+                     (W_superph_made > 0.0) ? (W_track_reject_nu / W_superph_made) : 0.0);
 
   // temporary data buffers
   double lnu_buf[N_EBINS];

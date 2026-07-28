@@ -71,7 +71,11 @@ WJET_ELECTRON_MODES = {4, 5}
 WJET_DEFAULTS: Dict[str, float] = {
     "sigma_transition": 2.0,
     "constant_beta_e0": 0.1,
-    "constant_beta_e0_exponent": 0.0,
+    # Matches IPOLE's default (model/iharm/model.c, `constant_beta_e0_exponent = 1.0`)
+    # and GRMONTY's own compiled-in default (model/iharm/model.c). Was previously 0.0,
+    # which zeroed the B-field dependence of the whole jet-temperature supplement --
+    # see docs/audits/2026-07-23_jet_electron_temperature_audit.md, Finding H1.
+    "constant_beta_e0_exponent": 1.0,
     "jet_sigma_cut": 10.0,
     "jet_beta_cut": 0.1,
     "jet_thetae": 50.0,
