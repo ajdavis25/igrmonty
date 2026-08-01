@@ -75,6 +75,111 @@ static void check_pair_brems_channel(double Thetae, double Ne, double theta)
   }
 }
 
+static void solve_pair_brems_channels(double Thetae, double Ne, double theta,
+                                      double *a, double *b, double *c)
+{
+  // Solve the three pair-brems channel strengths from the total brems
+  // emissivity at f = 0, 1/2, 1 (B = 0 makes synchrotron exactly zero, and
+  // brems is B-independent):
+  //   jb(f) = K * [ (1+2f) a + ((1+f)^2 + f^2) b + f(1+f) c ]
+  // with a = sigma_T*Fei, b = re^2*Fee_same, c = re^2*Fee_opp, and K the
+  // common frequency/temperature prefactor (cancels in channel ratios).
+  const double nu = 1.e10;
+  double old_ratio = positron_ratio;
+
+  positron_ratio = 0.0;
+  double j0 = jnu(nu, Ne, Thetae, 0.0, theta);
+  positron_ratio = 0.5;
+  double j05 = jnu(nu, Ne, Thetae, 0.0, theta);
+  positron_ratio = 1.0;
+  double j1 = jnu(nu, Ne, Thetae, 0.0, theta);
+  positron_ratio = old_ratio;
+
+  *c = 4. * j05 - j1 - 5. * j0;
+  *b = 0.5 * (j1 - 3. * j0) - *c;
+  *a = j0 - *b;
+}
+
+static void check_pair_brems_svensson(double Thetae, double Ne, double theta)
+{
+  // Rate-level Svensson (1982) asymptotes, stated independently of the
+  // per-term sigma_T-vs-re^2 prefactor conventions (Straub+ 2012):
+  //   q(e+e-)/q(e-i)  -> 2*sqrt(2)  for Thetae < 1   (c/a, exact since
+  //                                  sigma_T = (8 pi/3) re^2)
+  //   q(e+e-)/q(e-e)  -> 2          for Thetae > 1   (c/b)
+  // Magnitude-level guard against the normalization bug class of Finding
+  // PP-1 (docs/audits/2026-08-01_positron_implementation_audit.md); the
+  // channel-presence checks above cannot catch a wrongly-scaled channel.
+  double a, b, c;
+  solve_pair_brems_channels(Thetae, Ne, theta, &a, &b, &c);
+
+  if (!(a > 0. && b > 0. && c > 0.))
+  {
+    fprintf(stderr,
+            "pair brems test failed: non-positive channel strength at Thetae=%g (a=%g b=%g c=%g)\n",
+            Thetae, a, b, c);
+    exit(1);
+  }
+
+  if (Thetae < 1.)
+  {
+    // jnu_bremss builds its lepton-lepton prefactor from a locally-rounded
+    // e_charge = 4.80e-10 (upstream heritage), so (8 pi/3) re^2 differs from
+    // constants.h SIGMA_THOMSON by 0.26%. Assert the implemented identity
+    // tightly in the code's own constants, and the physical Svensson value
+    // only loosely (validated: measured/expected agree to 9e-13, job 781662).
+    const double e_charge = 4.80e-10;
+    const double re = e_charge * e_charge / ME / CL / CL;
+    const double expect = 2. * sqrt(2.) * (8. * M_PI / 3.) * re * re / SIGMA_THOMSON;
+    if (fabs(c / a - expect) > 1.e-9 * expect)
+    {
+      fprintf(stderr,
+              "pair brems test failed: NR e-e+/e-i rate ratio %.12g != %.12g at Thetae=%g\n",
+              c / a, expect, Thetae);
+      exit(1);
+    }
+    if (fabs(c / a - 2. * sqrt(2.)) > 0.01 * 2. * sqrt(2.))
+    {
+      fprintf(stderr,
+              "pair brems test failed: NR e-e+/e-i rate ratio %.12g not within 1%% of 2*sqrt(2) at Thetae=%g\n",
+              c / a, Thetae);
+      exit(1);
+    }
+  }
+  else
+  {
+    if (fabs(c / b - 2.) > 2.e-9)
+    {
+      fprintf(stderr,
+              "pair brems test failed: relativistic e-e+/e-e rate ratio %.12g != 2 at Thetae=%g\n",
+              c / b, Thetae);
+      exit(1);
+    }
+  }
+}
+
+static void check_pair_brems_continuity(double Ne, double theta)
+{
+  // The coefficient formulas are patched at Thetae = 1; every channel must
+  // cross the seam continuously (Fei matches to 0.02%, Fee_same to 0.4%,
+  // Fee_opp to 0.11% with the sigma_T/re^2 conversion in place -- and jumps
+  // x8.4 without it, which is how Finding PP-1 was diagnosed).
+  const double eps = 1.e-6;
+  const double tol = 0.01;
+  double al, bl, cl, ar, br, cr;
+  solve_pair_brems_channels(1. - eps, Ne, theta, &al, &bl, &cl);
+  solve_pair_brems_channels(1. + eps, Ne, theta, &ar, &br, &cr);
+
+  double ra = al / ar, rb = bl / br, rc = cl / cr;
+  if (fabs(ra - 1.) > tol || fabs(rb - 1.) > tol || fabs(rc - 1.) > tol)
+  {
+    fprintf(stderr,
+            "pair brems test failed: channel discontinuity across Thetae=1 (ei %.6g, same %.6g, opp %.6g)\n",
+            ra, rb, rc);
+    exit(1);
+  }
+}
+
 void test_pair_scalings(void)
 {
   double old_ratio = positron_ratio;
@@ -105,17 +210,29 @@ void test_pair_scalings(void)
   }
 #endif
 
+  // Synchrotron must scale exactly linearly in n_lep = (1+2f) n_i. Isolate
+  // synchrotron from the differently-scaling brems component by subtracting
+  // a B = 0 evaluation (jnu_thermal is 0 at B = 0; jnu_bremss ignores B).
   positron_ratio = 0.0;
-  double j0 = jnu_inv(nu, Thetae, Ne, B, theta);
+  double js0 = jnu(nu, Ne, Thetae, B, theta) - jnu(nu, Ne, Thetae, 0.0, theta);
   positron_ratio = 1.0;
-  double j1 = jnu_inv(nu, Thetae, Ne, B, theta);
-  if (!(j1 > j0)) {
-    fprintf(stderr, "pair scaling test failed: synch emissivity not increasing (%g -> %g)\n", j0, j1);
+  double js1 = jnu(nu, Ne, Thetae, B, theta) - jnu(nu, Ne, Thetae, 0.0, theta);
+  if (!(js0 > 0.0)) {
+    fprintf(stderr, "pair scaling test failed: non-positive synch emissivity (%g)\n", js0);
+    exit(1);
+  }
+  double ratio_j = js1 / js0;
+  if (fabs(ratio_j - 3.0) / 3.0 > 1.e-9) {
+    fprintf(stderr, "pair scaling test failed: synch ratio=%.12g expected exactly 3\n", ratio_j);
     exit(1);
   }
 
   check_pair_brems_channel(0.2, Ne, theta);
   check_pair_brems_channel(Thetae, Ne, theta);
+  check_pair_brems_svensson(0.05, Ne, theta);
+  check_pair_brems_svensson(0.5, Ne, theta);
+  check_pair_brems_svensson(10., Ne, theta);
+  check_pair_brems_continuity(Ne, theta);
 
   positron_ratio = old_ratio;
 }

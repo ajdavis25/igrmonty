@@ -261,7 +261,14 @@ static void bremss_pair_coeffs(double Thetae, double *Fei, double *Fee_same,
                      pow(Thetae, 1.5);
     Fee_same_local *=
         (1. + 1.1 * Thetae + Thetae * Thetae - 1.25 * pow(Thetae, 2.5));
-    Fee_opp_local = 2. * sqrt(2.) * Fei_local;
+    // Svensson's NR asymptote q(e+e-) -> 2 sqrt(2) q(e-i) is a RATE-level
+    // relation. Fei is consumed on the SIGMA_THOMSON prefactor but Fee_opp on
+    // the re^2 prefactor (Straub+ 2012 per-term split, see jnu_bremss), so the
+    // conversion factor sigma_T/re^2 = 8 pi/3 is required here. Without it the
+    // channel is ~8.4x low and jumps discontinuously at the Thetae = 1 patch
+    // point; with it, all three coefficients cross Thetae = 1 continuously
+    // (Finding PP-1, docs/audits/2026-08-01_positron_implementation_audit.md).
+    Fee_opp_local = 2. * sqrt(2.) * (8. * M_PI / 3.) * Fei_local;
   }
   else
   {

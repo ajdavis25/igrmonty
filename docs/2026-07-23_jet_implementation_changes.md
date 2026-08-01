@@ -1104,6 +1104,55 @@ instrumented, measured, negligible; methods-section caveat only.
 
 ---
 
+## 15. Post-campaign corpus audit: the existing 50-spectrum production corpus is not paper-usable (2026-07-28)
+
+The M_unit tuning campaign (SLURM array 774964) finished 2026-07-28 — final stragglers
+774964_34 (7d03h) and 774964_35 (6d12h), both SANE CRITBETAwJET a=+0.94 t6000 branches.
+All 57 branch keys in `munits_tuning_history.csv` now show converged=1. With the
+campaign complete, the full corpus (50 spectra in `igrmonty_outputs/m87/`: 12 RBETA,
+13 CRITBETA, 13 RBETAwJET, 12 CRITBETAwJET) was audited for paper-worthiness.
+
+**Verdict: no spectrum in the corpus is usable as paper data.** Four independent
+grounds, each individually disqualifying for its class:
+
+1. **H1 (all 25 wJET spectra, both spellings):** every production wJET output carries
+   `constant_beta_e0_exponent=0` — confirmed per-file in
+   `igrmonty_outputs/m87/_qa/wjet_provenance_report.csv` (`exponent_is_zero=YES` on
+   all 26 rows incl. trials) and live in the just-finished stragglers' parfiles and
+   CSV rows. The paper model (user decision, §1) is exponent=1.0; measured impact is
+   ~33× in L (§12a). The stragglers' 13.6 combined node-days tuned the wrong model.
+2. **M1 (all 25 Crit-β spectra: CRITBETA + CRITBETAwJET):** both campaign binaries
+   hard-code `crit_floor = 3.e-2`; the paper model restores baseline's `1.e-3` (§ M1).
+   A 30× different Θe floor on every cold zone.
+3. **Mixed, non-reconstructible provenance (whole corpus, incl. the 12 RBETA):** logs
+   split across two binaries — `githash 0bfdb56-dirty` (42 logs) and `e6ede55-dirty`
+   (14 logs) — both *dirty* builds whose exact source state is unrecoverable.
+   e6ede55 predates f72bbc1 ("fuller thermal pair-plasma treatment") yet produced
+   final corpus members, including a positron branch (MAD_RBETA a+0.94 t5000 pos1, no
+   later trial exists). Fails the M3 single-configuration requirement outright.
+4. **H2 unquantifiable (all MAD branches):** 16 MAD non-jet logs contain 1–218 silent
+   `isnan nu` photon drops each (e.g. MAD_RBETA_a+0.94_t4000 trial03: 211;
+   pos1_trial03: 218) with **no weight accounting in those binaries** — the bias is
+   unboundable from these runs. (The fixed code bounds it at ≤1.2e-14, §14 — a
+   property of reruns, not of these files.)
+
+Also absent from both campaign binaries: the D5 guards (no `L=nan` observed in any
+log — the catastrophic mode happened not to fire) and the D6 samplers (irrelevant
+under exponent=0, which masks the deep-KN regime).
+
+**What survives:** (a) the 57 converged M_units as warm starts for P4.1 — RBETA
+values should barely move, CRITBETA modestly (floor change), wJET substantially
+(supplement now real); (b) the campaign driver + false-convergence fix + SLURM
+plumbing, all proven over 57 branches; (c) the corpus itself as a "before" ensemble
+for quantifying the fixes' effect (appendix/referee material — not data).
+
+**Operational unlocks:** campaign done ⇒ `munits_tuning_history.csv` is no longer
+being written (P4.2 schema cleanup can proceed), the live `grmonty` binary is no
+longer in use (replaceable with a clean build of a6e1b40 — retiring the
+build-archive workaround), and the queue is free for Phase 4.
+
+---
+
 ## Update log
 
 - 2026-07-23: initial version — items 1-4 completed. Phase 2 run A vs B executed;
@@ -1229,4 +1278,34 @@ instrumented, measured, negligible; methods-section caveat only.
   planning recorded in sec 14: post-H1-fix jet arms cost ~44x matched non-jet
   walltime, and the MAD bolometric jet/non-jet ratio is ~404x (D4-style caveat
   applies -- isotropic totals are not the observable).
+- 2026-07-28 (tuning campaign finished -- corpus audited, sec 15): array 774964 fully
+  complete (57/57 branch keys converged). Post-campaign audit of all 50 production
+  spectra: NOT paper-usable on four independent grounds (H1 exponent=0 on all wJET;
+  M1 crit_floor=3e-2 vs paper 1e-3 on all Crit-beta; mixed dirty-build provenance
+  0bfdb56/e6ede55 across the corpus incl. a pre-pair-treatment positron branch; 1-218
+  silent unweighted isnan-nu drops in 16 MAD logs). Converged M_units retained as
+  P4.1 warm starts. CSV now safe to edit (P4.2) and live binary safe to replace.
+- 2026-08-01 (positron implementation audited -- Finding PP-1 found, fixed,
+  validated): full audit of positron_ratio vs the IPOLE reference fork, recorded in
+  docs/audits/2026-08-01_positron_implementation_audit.md. The core port is clean:
+  (1+2f) synchrotron/absorption/Compton scaling, photon-generation bookkeeping
+  (weights + zone counts + angular sampling), Thetae/Ne_unit conventions, and
+  parameter/provenance plumbing all verified correct and single-counted, matching
+  IPOLE's jnuinv/knuinv x(1+2f). One real bug (PP-1): the e+e- brems channel's
+  Thetae<1 coefficient was missing the sigma_T/re^2 = 8pi/3 prefactor conversion
+  (channel ~8.4x low, total cold-zone brems up to ~2.4x low at f=1; f=0 unaffected).
+  Diagnostic: the Thetae=1 patch-point discontinuity x8.387 numerically equals
+  8pi/3, and restoring it makes the channel continuous to 0.11%. Fixed in
+  src/jnu_mixed.c; tests upgraded from channel-presence to magnitude level
+  (rate-level Svensson asymptotes c/a->2sqrt2 NR and c/b->2 rel, seam continuity,
+  exact-3x synch isolation via B=0 subtraction). Staged build validation: job
+  781662 exposed a 0.26% constants-rounding subtlety in the test expectation
+  (jnu_bremss's local e_charge=4.80e-10 vs constants.h SIGMA_THOMSON; test
+  re-anchored to the implemented identity, measured-vs-predicted 9e-13), job
+  781663 PASSED rc=42 (full suite incl. deep-KN). Also flagged upstream: the
+  reference IPOLE fork scales polarized jV/aV/rV by 1/(1+f) where its own additive
+  convention implies x1 -- raise with Richard/Angelo before any polarized pos1
+  IPOLE images enter the paper. Production note: e6ede55-built pos1 corpus spectra
+  had correct synch/IC pair scaling but no e+e- brems channel at all; 0bfdb56 ones
+  carried the 8.4x-low version; Phase 4 pos1 reruns pick up the corrected physics.
 
