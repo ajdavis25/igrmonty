@@ -128,15 +128,16 @@ static void check_pair_brems_svensson(double Thetae, double Ne, double theta)
     // constants.h SIGMA_THOMSON by 0.26%. Assert the implemented identity
     // tightly in the code's own constants, and the physical Svensson value
     // only loosely (validated: measured/expected agree to 9e-13, job 781662).
+    // NR: non-relativistic
     const double e_charge = 4.80e-10;
     const double re = e_charge * e_charge / ME / CL / CL;
     const double expect = 2. * sqrt(2.) * (8. * M_PI / 3.) * re * re / SIGMA_THOMSON;
     if (fabs(c / a - expect) > 1.e-9 * expect)
     {
       fprintf(stderr,
-              "pair brems test failed: NR e-e+/e-i rate ratio %.12g != %.12g at Thetae=%g\n",
+              "pair brems test failed: NR e-e=/e-i rate ratio %.12g != %.12g at Thetae=%g\n",
               c / a, expect, Thetae);
-      exit(1);
+              exit(1);
     }
     if (fabs(c / a - 2. * sqrt(2.)) > 0.01 * 2. * sqrt(2.))
     {

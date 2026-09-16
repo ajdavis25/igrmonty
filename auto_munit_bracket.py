@@ -71,8 +71,8 @@ WJET_ELECTRON_MODES = {4, 5}
 WJET_DEFAULTS: Dict[str, float] = {
     "sigma_transition": 2.0,
     "constant_beta_e0": 0.1,
-    # Matches IPOLE's default (model/iharm/model.c, `constant_beta_e0_exponent = 1.0`)
-    # and GRMONTY's own compiled-in default (model/iharm/model.c). Was previously 0.0,
+    # matches IPOLE's default (model/iharm/model.c, `constant_beta_e0_exponent = 1.0`)
+    # and GRMONTY's own compiled-in default (model/iharm/model.c). was previously 0.0,
     # which zeroed the B-field dependence of the whole jet-temperature supplement --
     # see docs/audits/2026-07-23_jet_electron_temperature_audit.md, Finding H1.
     "constant_beta_e0_exponent": 1.0,
@@ -80,6 +80,12 @@ WJET_DEFAULTS: Dict[str, float] = {
     "jet_beta_cut": 0.1,
     "jet_thetae": 50.0,
     "jet_ne_mult": 1.0,
+    # 1 = paper-literal P_B = B^2/(8 pi) (Anantua+2020; Emami+2021 eq. 25) for
+    # the constant-beta supplement; the legacy as-shipped form is 12*pi hotter
+    # and traced to a transcription slip in the group's ipole fork -- see
+    # docs/2026-09-08_12pi_provenance_verdict.md. Adopted for all go-forward
+    # wJET production (Phase 4). Override per-row via CSV column or CLI.
+    "constant_beta_paper_literal": 1.0,
 }
 
 PC_TO_CM = 3.085677581e18
@@ -102,17 +108,17 @@ TrialResult = namedtuple(
 
 
 class TrialTimeoutError(RuntimeError):
-    """Raised when one GRMONTY trial exceeds the local wallclock guard."""
+    """raised when one GRMONTY trial exceeds the local wallclock guard."""
 
 
 class JobRuntimeBudgetExceeded(RuntimeError):
-    """Raised when the Slurm allocation is too close to expiry for another trial."""
+    """raised when the slurm allocation is too close to expiry for another trial."""
 
 
 class MaxItersExceededError(RuntimeError):
-    """Raised when max_iters is exhausted without reaching flux tolerance.
+    """raised when max_iters is exhausted without reaching flux tolerance.
 
-    Carries the closest trial so the caller can report it without treating
+    carries the closest trial so the caller can report it without treating
     it as a genuine convergence (no history 'converged' flag, no promotion
     to a suffix-free final filename via cleanup()).
     """
@@ -123,7 +129,7 @@ class MaxItersExceededError(RuntimeError):
 
 
 class BiasAbortError(RuntimeError):
-    """Raised when GRMONTY stops a trial through the scatter-ratio bias guard."""
+    """raised when GRMONTY stops a trial through the scatter-ratio bias guard."""
 
     def __init__(
         self,
@@ -142,7 +148,7 @@ class BiasAbortError(RuntimeError):
 
 
 def format_seconds(seconds: float) -> str:
-    """Human-readable duration for log messages."""
+    """human-readable duration for log messages."""
     seconds = max(0.0, float(seconds))
     hours, rem = divmod(int(round(seconds)), 3600)
     minutes, secs = divmod(rem, 60)
@@ -301,6 +307,10 @@ def resolve_wjet_params(
         ("jet_beta_cut", ("jet_beta_cut", "jetBetaCut")),
         ("jet_thetae", ("jet_thetae", "jetThetae")),
         ("jet_ne_mult", ("jet_ne_mult", "jetNeMult")),
+        (
+            "constant_beta_paper_literal",
+            ("constant_beta_paper_literal", "constantBetaPaperLiteral"),
+        ),
     )
 
     values: Dict[str, float] = {}
@@ -659,6 +669,7 @@ def write_par_file(
     jet_beta_cut: Optional[float],
     jet_thetae: Optional[float],
     jet_ne_mult: Optional[float],
+    constant_beta_paper_literal: Optional[float],
     fit_bias: int,
     bias_ns: int,
     bias_start: float,
@@ -697,6 +708,7 @@ def write_par_file(
             ("jet_beta_cut", jet_beta_cut),
             ("jet_thetae", jet_thetae),
             ("jet_ne_mult", jet_ne_mult),
+            ("constant_beta_paper_literal", constant_beta_paper_literal),
         )
         missing = [name for name, value in wjet_pairs if value is None]
         if missing:
@@ -729,7 +741,7 @@ def parse_munit_from_par(par_path: Path) -> float:
 
 
 def parse_grmonty_run_status(log_path: Path) -> Tuple[Optional[int], Optional[str], str]:
-    """Return the final GRMONTY run status tuple from a trial log, if present."""
+    """return the final GRMONTY run status tuple from a trial log, if present."""
     try:
         lines = log_path.read_text(errors="replace").splitlines()
     except FileNotFoundError:
@@ -795,14 +807,14 @@ class MunitTuner:
             self._load_existing_trials()
 
     def _remaining_job_budget(self) -> Optional[float]:
-        """Return remaining local runtime budget, or None when disabled."""
+        """return remaining local runtime budget, or None when disabled."""
         if self.args.job_runtime_budget_sec <= 0:
             return None
         elapsed = time.monotonic() - self.started_at
         return self.args.job_runtime_budget_sec - elapsed
 
     def _ensure_time_for_new_trial(self) -> None:
-        """Avoid starting a trial that cannot reasonably finish before Slurm kills it."""
+        """avoid starting a trial that cannot reasonably finish before Slurm kills it."""
         remaining = self._remaining_job_budget()
         if remaining is None:
             return
@@ -816,7 +828,7 @@ class MunitTuner:
             )
 
     def _trial_timeout(self) -> Optional[float]:
-        """Combine the per-trial guard with the remaining job budget."""
+        """combine the per-trial guard with the remaining job budget."""
         timeout: Optional[float] = None
         if self.args.trial_timeout_sec > 0:
             timeout = float(self.args.trial_timeout_sec)
@@ -1018,6 +1030,11 @@ class MunitTuner:
             "spec_path",
             "par_path",
             "log_path",
+            # appended at the END so rows written by earlier schema eras keep
+            # their column alignment for position-based parsers (this file has
+            # mixed schemas: 19-col 2025 header, 27-col jul2026 rows, 28-col
+            # phase-4 rows).
+            "constant_beta_paper_literal",
         ]
 
         with self.history_csv.open("a", newline="") as fh:
@@ -1056,6 +1073,9 @@ class MunitTuner:
                     "spec_path": str(trial.spec_path),
                     "par_path": str(trial.par_path),
                     "log_path": str(trial.log_path),
+                    "constant_beta_paper_literal": self.context["wjet_params"].get(
+                        "constant_beta_paper_literal", ""
+                    ),
                 }
             )
 
@@ -1102,6 +1122,9 @@ class MunitTuner:
             jet_beta_cut=self.context["wjet_params"].get("jet_beta_cut"),
             jet_thetae=self.context["wjet_params"].get("jet_thetae"),
             jet_ne_mult=self.context["wjet_params"].get("jet_ne_mult"),
+            constant_beta_paper_literal=self.context["wjet_params"].get(
+                "constant_beta_paper_literal"
+            ),
             fit_bias=self.args.fit_bias,
             bias_ns=self.args.fit_bias_ns,
             bias_start=self.args.bias,
@@ -1430,6 +1453,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help="Override jet_ne_mult for RBETAwJET/CRITBETAwJET runs.",
     )
+    parser.add_argument(
+        "--constant-beta-paper-literal",
+        type=float,
+        default=None,
+        help=(
+            "Override constant_beta_paper_literal (1 = P_B = B^2/8pi per the "
+            "papers, 0 = legacy 12*pi-hot form) for RBETAwJET/CRITBETAwJET "
+            "runs. Default: repo policy 1 (see WJET_DEFAULTS)."
+        ),
+    )
 
     parser.add_argument(
         "--fit-bias",
@@ -1535,6 +1568,17 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Path to CSV file where tuning history is appended.",
     )
     parser.add_argument(
+        "--run-subdir",
+        default=None,
+        help=(
+            "Subdirectory (e.g. an era tag like 'postfix_2026-08') appended to both the "
+            "spectrum output dir and the par/log dir, so run generations stay separate. "
+            "Default: an auto date-stamped 'run_YYYY-MM-DD'. Pass an explicit name to "
+            "group a campaign (required with --resume to continue runs started on an "
+            "earlier day). Pass '.' to write to the top-level dirs (old behavior)."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume from existing spectra/logs/parfiles if present.",
@@ -1557,7 +1601,23 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
+    global OUT_DIR, LOG_DIR
+
     args = parse_args(argv)
+
+    if args.run_subdir:
+        subdir = args.run_subdir.strip().strip("/")
+    else:
+        subdir = f"run_{datetime.now():%Y-%m-%d}"
+    if subdir == ".":
+        print("[ctx] run-subdir '.': writing to top-level output/log dirs", flush=True)
+    elif subdir:
+        OUT_DIR = OUT_DIR / subdir
+        LOG_DIR = LOG_DIR / subdir
+        print(
+            f"[ctx] run-subdir '{subdir}': spectra -> {OUT_DIR} | par/logs -> {LOG_DIR}",
+            flush=True,
+        )
 
     row = load_row(args.csv, args.row)
     positron_runs = resolve_positron_runs(row, override=args.positron_ratio)
@@ -1619,6 +1679,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 "jet_beta_cut",
                 "jet_thetae",
                 "jet_ne_mult",
+                "constant_beta_paper_literal",
             )
             summary = " ".join(
                 f"{name}={context['wjet_params'][name]:.12g}"

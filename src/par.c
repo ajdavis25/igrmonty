@@ -27,6 +27,7 @@ void load_par_from_argv(int argc, char *argv[], Params *params)
   params->sigma_transition = 1.0;
   params->constant_beta_e0 = 0.1;
   params->constant_beta_e0_exponent = 1.0;
+  params->constant_beta_paper_literal = 0;
   params->jet_sigma_cut = -1.0;
   params->jet_beta_cut = -1.0;
   params->jet_thetae = 0.0;
@@ -119,6 +120,7 @@ void load_par(const char *fname, Params *params)
     read_param(line, "sigma_transition", &(params->sigma_transition), TYPE_DBL);
     read_param(line, "constant_beta_e0", &(params->constant_beta_e0), TYPE_DBL);
     read_param(line, "constant_beta_e0_exponent", &(params->constant_beta_e0_exponent), TYPE_DBL);
+    read_param(line, "constant_beta_paper_literal", &(params->constant_beta_paper_literal), TYPE_INT);
     read_param(line, "jet_sigma_cut", &(params->jet_sigma_cut), TYPE_DBL);
     read_param(line, "jet_beta_cut", &(params->jet_beta_cut), TYPE_DBL);
     read_param(line, "jet_thetae", &(params->jet_thetae), TYPE_DBL);

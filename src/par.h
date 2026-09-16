@@ -45,6 +45,7 @@ typedef struct params_t
   double sigma_transition;
   double constant_beta_e0;
   double constant_beta_e0_exponent;
+  int constant_beta_paper_literal;
   double jet_sigma_cut;
   double jet_beta_cut;
   double jet_thetae;

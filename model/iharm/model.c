@@ -28,6 +28,15 @@ static double Thetae_max = 1.e3;
 static double sigma_transition = 1.0;
 static double constant_beta_e0 = 0.1;
 static double constant_beta_e0_exponent = 1.0;
+// P_B convention for the constant-beta supplement.
+//   0 (legacy, default): energy_density = B_cgs^2/(2(game-1)) -- the form the
+//     group's ipole fork ships, which is 12*pi (~37.7x) hotter than the papers.
+//   1 (paper-literal):   P_B = B_cgs^2/(8 pi), i.e. P_e = beta_e0 * P_B exactly
+//     as defined in Anantua+2020 (MNRAS 493, 1404: beta_e = P_e/(b^2/2) in HL
+//     code units) and Emami+2021 (ApJ 923, 272, eq. 25: P_B = B^2/8pi in CGS).
+// At exponent = 1 the two differ by exactly 12*pi. Parameter-gated so every
+// existing run stays reproducible; see docs/2026-08-06_zoom_agenda_thetae_cap.md.
+static int constant_beta_paper_literal = 0;
 static double jet_sigma_cut = -1.0;
 static double jet_beta_cut = -1.0;
 static double jet_thetae = 0.0;
@@ -485,7 +494,17 @@ static inline double constant_beta_thetae(double safe_rho, double safe_B)
   }
 
   double B_cgs = fabs(safe_B) * B_unit;
-  double energy_density = (B_cgs * B_cgs) / (2.0 * (game - 1.0));
+  // See constant_beta_paper_literal above: 1 -> P_B = B^2/8pi (papers),
+  // 0 -> legacy B^2/(2(game-1)) (as-shipped, 12*pi hotter at exponent 1).
+  double energy_density;
+  if (constant_beta_paper_literal)
+  {
+    energy_density = (B_cgs * B_cgs) / (8.0 * M_PI);
+  }
+  else
+  {
+    energy_density = (B_cgs * B_cgs) / (2.0 * (game - 1.0));
+  }
   if (!(energy_density > 0.0) || !isfinite(energy_density))
   {
     return 0.0;
@@ -1081,6 +1100,7 @@ void init_data(int argc, char *argv[], Params *params)
     sigma_transition = params->sigma_transition;
     constant_beta_e0 = params->constant_beta_e0;
     constant_beta_e0_exponent = params->constant_beta_e0_exponent;
+    constant_beta_paper_literal = params->constant_beta_paper_literal;
     jet_sigma_cut = params->jet_sigma_cut;
     jet_beta_cut = params->jet_beta_cut;
     jet_thetae = params->jet_thetae;
@@ -1193,6 +1213,13 @@ void init_data(int argc, char *argv[], Params *params)
   {
     fprintf(stderr, "! unsupported electron model selection (with_electrons = %d)\n", with_electrons);
     exit(-3);
+  }
+  if (with_electrons == 4 || with_electrons == 5)
+  {
+    fprintf(stderr, "constant-beta P_B form: %s\n",
+            constant_beta_paper_literal
+                ? "paper-literal B^2/8pi (constant_beta_paper_literal = 1)"
+                : "legacy B^2/(2(game-1)) (12*pi hotter than papers; constant_beta_paper_literal = 0)");
   }
 
   if (with_radiation)
@@ -1580,6 +1607,7 @@ void report_spectrum(int N_superph_made, Params *params)
       h5io_add_data_dbl(fid, "/params/electrons/sigma_transition", sigma_transition);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0", constant_beta_e0);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0_exponent", constant_beta_e0_exponent);
+      h5io_add_data_int(fid, "/params/electrons/constant_beta_paper_literal", constant_beta_paper_literal);
       h5io_add_data_dbl(fid, "/params/electrons/jet_sigma_cut", jet_sigma_cut);
       h5io_add_data_dbl(fid, "/params/electrons/jet_beta_cut", jet_beta_cut);
       h5io_add_data_dbl(fid, "/params/electrons/jet_thetae", jet_thetae);
@@ -1595,6 +1623,7 @@ void report_spectrum(int N_superph_made, Params *params)
       h5io_add_data_dbl(fid, "/params/electrons/sigma_transition", sigma_transition);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0", constant_beta_e0);
       h5io_add_data_dbl(fid, "/params/electrons/constant_beta_e0_exponent", constant_beta_e0_exponent);
+      h5io_add_data_int(fid, "/params/electrons/constant_beta_paper_literal", constant_beta_paper_literal);
       h5io_add_data_dbl(fid, "/params/electrons/jet_sigma_cut", jet_sigma_cut);
       h5io_add_data_dbl(fid, "/params/electrons/jet_beta_cut", jet_beta_cut);
       h5io_add_data_dbl(fid, "/params/electrons/jet_thetae", jet_thetae);

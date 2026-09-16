@@ -33,6 +33,11 @@ TOTAL_ROWS=$(( $(wc -l < "$CSV_PATH") - 1 ))
 SKIP_CRIT_RHIGH_DUPES="${SKIP_CRIT_RHIGH_DUPES:-1}"
 EXPAND_POSITRON_BRANCHES="${EXPAND_POSITRON_BRANCHES:-1}"
 AUTO_MUNIT_RESUME="${AUTO_MUNIT_RESUME:-1}"
+# Phase-4 binary: the repo-root ./grmonty (Jun 11) predates
+# constant_beta_paper_literal and silently ignores the key (= legacy physics
+# while the par claims paper-literal). Default to the Phase-4 build; set
+# AUTO_MUNIT_GRMONTY_BIN explicitly to run a different binary on purpose.
+AUTO_MUNIT_GRMONTY_BIN="${AUTO_MUNIT_GRMONTY_BIN:-/work/vmo703/scratch/p4_staging/build/grmonty_p4}"
 AUTO_MUNIT_FIT_BIAS="${AUTO_MUNIT_FIT_BIAS:-1}"
 AUTO_MUNIT_FIT_BIAS_NS="${AUTO_MUNIT_FIT_BIAS_NS:-14000}"
 AUTO_MUNIT_BIAS="${AUTO_MUNIT_BIAS:-0.05}"
@@ -43,6 +48,14 @@ AUTO_MUNIT_JOB_RUNTIME_BUDGET_SEC="${AUTO_MUNIT_JOB_RUNTIME_BUDGET_SEC:-244800}"
 AUTO_MUNIT_JOB_STOP_MARGIN_SEC="${AUTO_MUNIT_JOB_STOP_MARGIN_SEC:-7200}"
 AUTO_MUNIT_MIN_TRIAL_RUNTIME_SEC="${AUTO_MUNIT_MIN_TRIAL_RUNTIME_SEC:-14400}"
 AUTO_MUNIT_BIAS_BACKOFF_FACTOR="${AUTO_MUNIT_BIAS_BACKOFF_FACTOR:-5}"
+# Default run subdir: date-stamped from the array job's SUBMISSION time so every
+# task of one campaign shares a folder even when tasks start on different days.
+# Override with AUTO_MUNIT_RUN_SUBDIR=<name>; use AUTO_MUNIT_RUN_SUBDIR=. for the
+# old top-level behavior. To resume a previous campaign, pass its folder name.
+if [[ -z "${AUTO_MUNIT_RUN_SUBDIR:-}" ]]; then
+  SUBMIT_DATE="$(scontrol show job "${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-}}" 2>/dev/null | grep -oP 'SubmitTime=\K[0-9-]+' | head -1 || true)"
+  AUTO_MUNIT_RUN_SUBDIR="run_${SUBMIT_DATE:-$(date +%F)}"
+fi
 
 TASK_LIST_FILE="$(mktemp)"
 trap 'rm -f "${TASK_LIST_FILE}"' EXIT
@@ -257,8 +270,18 @@ CMD=(
 if [[ -n "${POSITRON_RATIO}" ]]; then
   CMD+=(--positron-ratio "$POSITRON_RATIO")
 fi
+if [[ -n "${AUTO_MUNIT_GRMONTY_BIN}" ]]; then
+  if [[ ! -x "${AUTO_MUNIT_GRMONTY_BIN}" ]]; then
+    echo "[ERROR] AUTO_MUNIT_GRMONTY_BIN '${AUTO_MUNIT_GRMONTY_BIN}' is not executable" >&2
+    exit 1
+  fi
+  CMD+=(--grmonty-bin "$AUTO_MUNIT_GRMONTY_BIN")
+fi
 if [[ "${AUTO_MUNIT_RESUME}" == "1" ]]; then
   CMD+=(--resume)
+fi
+if [[ -n "${AUTO_MUNIT_RUN_SUBDIR}" ]]; then
+  CMD+=(--run-subdir "$AUTO_MUNIT_RUN_SUBDIR")
 fi
 
 JOB_TAG="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"

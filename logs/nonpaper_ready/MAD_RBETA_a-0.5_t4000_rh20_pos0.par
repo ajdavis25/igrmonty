@@ -9,7 +9,7 @@ fit_bias 1
 fit_bias_ns 50000
 bias 0.05
 bias_abort_ratio 10.0
-ratio 1.4142135623730951
+ratio 1.414
 
 TP_OVER_TE 3.0
 beta_crit 1
