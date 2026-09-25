@@ -24,7 +24,9 @@ SCRIPT_DIR="/work/vmo703/igrmonty"
 BRACKET="${SCRIPT_DIR}/auto_munit_bracket.py"
 cd "$SCRIPT_DIR"
 
-export OMP_NUM_THREADS=1
+# Respect the allocation: 1 core for tuner-style tasks, but MAD wJET trials
+# are ~325 core-hours and need --cpus-per-task=16 (rescue 2026-09-25).
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OMP_PROC_BIND=true
 export OMP_PLACES=cores
 
@@ -37,12 +39,16 @@ AUTO_MUNIT_RESUME="${AUTO_MUNIT_RESUME:-1}"
 # constant_beta_paper_literal and silently ignores the key (= legacy physics
 # while the par claims paper-literal). Default to the Phase-4 build; set
 # AUTO_MUNIT_GRMONTY_BIN explicitly to run a different binary on purpose.
-AUTO_MUNIT_GRMONTY_BIN="${AUTO_MUNIT_GRMONTY_BIN:-/work/vmo703/scratch/p4_staging/build/grmonty_p4}"
+AUTO_MUNIT_GRMONTY_BIN="${AUTO_MUNIT_GRMONTY_BIN:-/work/vmo703/scratch/p4_staging/build/grmonty_p4b}"
 AUTO_MUNIT_FIT_BIAS="${AUTO_MUNIT_FIT_BIAS:-1}"
 AUTO_MUNIT_FIT_BIAS_NS="${AUTO_MUNIT_FIT_BIAS_NS:-14000}"
 AUTO_MUNIT_BIAS="${AUTO_MUNIT_BIAS:-0.05}"
 AUTO_MUNIT_TARGET_RATIO="${AUTO_MUNIT_TARGET_RATIO:-1.05}"
-AUTO_MUNIT_BIAS_ABORT_RATIO="${AUTO_MUNIT_BIAS_ABORT_RATIO:-5}"
+# abort_ratio 100, not 5: the fixed-M_unit A/B measured scatter ratio ~10 as
+# NORMAL for this code on MADs, and at limit 5 the guard trips on healthy
+# trials, triggering the x5 M_unit backoff spiral that budget-killed 11
+# Phase-4 tasks (rescue 2026-09-25).
+AUTO_MUNIT_BIAS_ABORT_RATIO="${AUTO_MUNIT_BIAS_ABORT_RATIO:-100}"
 AUTO_MUNIT_TRIAL_TIMEOUT_SEC="${AUTO_MUNIT_TRIAL_TIMEOUT_SEC:-216000}"
 AUTO_MUNIT_JOB_RUNTIME_BUDGET_SEC="${AUTO_MUNIT_JOB_RUNTIME_BUDGET_SEC:-244800}"
 AUTO_MUNIT_JOB_STOP_MARGIN_SEC="${AUTO_MUNIT_JOB_STOP_MARGIN_SEC:-7200}"

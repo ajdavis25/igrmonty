@@ -580,12 +580,18 @@ double thetae_func(double uu, double rho, double B, double kel)
   const double rho_floor = 1.e-30;
   const double uu_floor = 1.e-30;
   const double rb_floor = 1.e-3;
-  // Matches IPOLE's flat, model-independent floor (ipole model/iharm/model.c,
-  // "Secret floor", fmax(..., 1.e-3) applied regardless of electronModel).
-  // Previously 3.e-2 here, which both diverged from IPOLE and disagreed with the
-  // THETAE_MIN comment in model.h -- see
-  // docs/audits/2026-07-23_jet_electron_temperature_audit.md, Finding M1.
-  const double crit_floor = 1.e-3;
+  // The Crit-beta floor is PART OF THE MODEL, not a numerical detail: ~45% of
+  // SANE zones sit AT this floor, and the floored disk dominates Crit-beta
+  // photon generation. Production convention (ashton, 2026-09-25): 3.e-2 --
+  // the value every published-comparison spectrum in the July 2026 grid used.
+  // History: Finding M1 (a6e1b40, 2026-07-28) lowered this to 1.e-3 to match
+  // IPOLE's flat floor; at 1.e-3 the Crit-beta field is too dim to generate
+  // any superphotons at July-grid M_units (weight table drowns under
+  // WEIGHT_MIN), which killed all 24 Crit-beta Phase-4 tasks -- root-caused by
+  // bisect 2026-09-25, docs/2026-09-25_critbeta_floor_decision.md. If IPOLE
+  // consistency is required for imaging comparisons, harmonize by raising
+  // IPOLE's floor to 3.e-2 for Crit-beta models, not by lowering this one.
+  const double crit_floor = 3.e-2;
 
   double safe_rho = clamp_positive(rho, rho_floor);
   double safe_uu = clamp_positive(uu, uu_floor);

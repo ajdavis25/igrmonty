@@ -96,6 +96,13 @@ or β ≤ 0.1; everything clamped at Θe = 10³. Each model retuned to 0.5 Jy @ 
    small scan ({Θe_max or β_e0} × MAD/SANE) with acceptance = 17° SED gates
    (X-ray 4.4×10⁴⁰, NIR ~mJy) — pipeline is push-button ready.
 
+6. **Crit-β Θe floor = 3×10⁻² is part of the model (decided: ashton,
+   09-25).** Finding M1's 1×10⁻³ (ipole-matching) made Crit-β unable to
+   generate photons at grid M_units and killed 24 Phase-4 tasks; reverted,
+   documented in methods, full chain in
+   docs/2026-09-25_critbeta_floor_decision.md. Group item: harmonize by
+   raising IPOLE's floor for Crit-β models before P4.3 imaging.
+
 ## If time permits
 
 - ipole positron polarization: jV/aV/rV carry 1/(1+f) — looks (1+f) low; needed
