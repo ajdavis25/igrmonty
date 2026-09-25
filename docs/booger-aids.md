@@ -7,7 +7,7 @@ matters. Jargon is unpacked as it appears.
 
 ---
 
-## The vocabulary, up front
+## The vocabulary
 
 - **Θe ("theta-e")** — electron temperature written as a pure number:
   Θe = kT_e / (m_e c²), i.e. "thermal energy per electron divided by the
