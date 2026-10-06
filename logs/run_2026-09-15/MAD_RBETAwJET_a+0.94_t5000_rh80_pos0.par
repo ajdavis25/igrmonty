@@ -1,0 +1,29 @@
+seed -1
+Ns 1000000.0
+MBH 6500000000.0
+M_unit 1.02965771e+25
+dump /work/vmo703/grmhd_dump_samples/Ma+0.94_5000.h5
+spectrum /work/vmo703/igrmonty_outputs/m87/run_2026-09-15/spectrum_Ma+0.94_5000_RBETAwJET_rh80_pos0_trial02.h5
+
+fit_bias 0
+fit_bias_ns 14000
+bias 0.05
+bias_abort_ratio 100.0
+ratio 1.05
+
+TP_OVER_TE 3.0
+beta_crit 1
+beta_crit_coefficient 0.5
+with_electrons 4
+trat_small 1
+trat_large 80
+sigma_transition 2
+constant_beta_e0 0.1
+constant_beta_e0_exponent 1
+jet_sigma_cut 10
+jet_beta_cut 0.1
+jet_thetae 50
+jet_ne_mult 1
+constant_beta_paper_literal 1
+positron_ratio 0
+Thetae_max 1e100

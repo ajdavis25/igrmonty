@@ -1,4 +1,4 @@
-# Where things stand after Brandon's email — the long, plain-language version
+# Where things stand after Brandon's email
 
 Written 2026-08-07. Companion to `2026-08-06_zoom_agenda_thetae_cap.md` (the
 one-page version for the call). This is the same material at walking pace:
@@ -57,6 +57,8 @@ matters. Jargon is unpacked as it appears.
   inside the definition of the field, so the same physical pressure is
   written b²/2. Both are correct on their own; mixing them in one formula
   silently multiplies the answer by 4π.
+- **4pi averaged** — smear the light equally over the whole sky and quote that average.
+- **17 degree cone (observer frame)** — count onnly the light escaping toward us.
 
 ## One-paragraph refresher on our model
 
@@ -342,3 +344,36 @@ fine. What's left is one factual adjudication only the code's authors can
 make, two scope decisions (σ boundary, β arm), one caveat to word (energy
 conservation), and one afternoon of literature homework. That's a short
 list, and all of it is on the agenda for the call he suggested.
+
+## Update on MAD RBETAwJET "Fails"
+
+- Every MAD RBETAwJET branch tuned to 0.5 Jy overproduces the 2017 core X-ray at 4π — a−0.5: 2.4–5.2x over the 4.4e40 limit; a+0.94: 1.3–5.7x over.
+  * Chandra & NuSTAR measured 4.4x10^40 erg/s in 2-10 keV band (celing for the model)
+  * modeling to match exactly one observaiton (the 0.5 Jy of radio light at 230 GHz by tuning M_unit (how much gas there is))
+  * once the dial is set, the model has no freedom left -- everything it emite, including x-rays, is a prediction
+  * so by overproduces i mean: after being correctly calibrated at 240 GHz, the MADwJET models predict 1.3 - 5.7x more x-ray light than the telescopes actually saw
+  * can't hide x-rays that would have been detected so a model that overproduces them is in conflict with data
+
+- The viewing frame decides who survives: in the 17° observer cone, a+0.94 drops to 1.3–5.1e40 (5 of 6 under the gate; d4000 pos1 marginal), but a−0.5 stays 1.6–3.3× over even in-frame. Retrograde MAD wJET at β_e0 = 0.1/rh80 is X-ray-excluded in both frames; prograde lives only if the observer-frame gate is the one that counts — the long-parked "tuning frame" question now has real consequences.
+
+- Perspective: under the legacy 12π form these would all be ~9× higher — instantly dead. The paper-literal fix is what makes this model class constrainable instead of trivially excluded, and β_e0 (yours is 10× Emami's best-bet 10⁻²) is the natural knob for the small scan the agenda already anticipated.
+
+| gate | what's checked | the reference ("truth") | kind |
+|---|---|---|---|
+| gate_F230 | F230(4π) within ~10% of 0.5 Jy | M87's observed 230 GHz compact-core flux (the EHT-era value the group adopted) | calibration anchor — the model is fitted to this, so the QA is really verifying the tuner did its job |
+| gate_LX_4pi | L_X(2–10 keV) ≤ 4.4×10⁴⁰ erg/s | the 2017 Chandra+NuSTAR core X-ray measurement | independent constraint — the model is not fitted to this, so it's the actual falsifier |
+| gate_provenance | Ns=10⁶, clean status, paper_literal=1 on wJET | the production spec (what we decided every run must use) | internal consistency, not an observation |
+
+---
+
+## So what
+
+The good news: the MAD CRITBETA spectra have now landed (11 of 12), and they pass the X-ray gate spectacularly: L_X ≈ 3×10³⁷–2×10³⁸, which is 200–1500× under the limit, with Compton fractions of just 3–11%. So the factual pattern is real: MAD RBETAwJET fails, MAD CRITBETA sails.
+
+The failing models aren't "R-β" — they're R-β plus the jet supplement (that's the "wJET": the β_e0 = 0.1 sheath and the Θe = 50 jet override), while the passing MAD Crit-β branches have no supplement at all (the grid contains no MAD CRITBETAwJET). Look at where the X-rays come from: the failing set is 42–64% Compton-scattered light — that's the hot supplement sheath upscattering photons — while the passing set is nearly Compton-silent. So the defensible attribution is: the jet supplement at β_e0 = 0.1 on MADs overproduces X-rays, not "the EHT R-β prescription overproduces." The clean control is already in flight: the plain MAD R-β branches (rh20, no supplement) are in the resume wave, and their July versions passed the gate with 5× room — when they land and pass, the story closes airtight: R-β base passes, Crit-β base passes, and it's the supplement's parameterization that breaks the limit.
+
+---
+
+An epistemics point worth internalizing before the advisor conversation: passing an upper limit doesn't make a model better — it makes it not-excluded. The 4.4×10⁴⁰ is a ceiling, and Crit-β at β_crit = 0.01 clears it by three orders of magnitude because it's so cold it barely emits X-rays at all. A model that predicted zero X-rays would "pass" perfectly while explaining nothing. Consistent ≠ confirmed. What the gate genuinely did is discriminate within the wJET family — which means X-ray data now constrains β_e0 on MADs. The data is pushing β_e0 down from your group's 0.1 toward ~0.01–0.03… and 10⁻² is exactly Emami+2021's published best-bet. Observation converging on the literature's preferred value is a much stronger story than "model A beats model B."
+
+One last wrinkle for the politics: Crit-β is indeed your advisor's construction (Anantua+2020) — but so is the jet supplement that's failing. Both the winner and the loser in your framing are his. So the 2017 X-ray limit constrains the constant-β_e jet supplement to β_e0 ≲ few×10⁻², independently landing on the published best-bet.
